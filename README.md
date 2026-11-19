@@ -25,6 +25,16 @@ cmake --build --preset release
 
 새 배포용 zip 만들기: `cmake --build --preset release --target PACKAGE`
 
+
+### Linux Package Install
+
+```bash
+sudo apt-get update && sudo apt-get install -y \
+  build-essential cmake ninja-build pkg-config \
+  qt6-base-dev qt6-wayland libmpv-dev libgl1-mesa-dev \
+  libxcb-cursor0 patchelf desktop-file-utils file wget
+```
+
 ### Linux / macOS
 시스템 패키지 관리자 또는 Homebrew로 `qt6`, `mpv`(`libmpv`), `pkg-config`, `ninja`를 설치한 뒤 빌드합니다.
 

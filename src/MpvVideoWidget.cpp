@@ -53,8 +53,6 @@ void MpvVideoWidget::OnFrameSwapped() {
 
 namespace {
 
-constexpr int kGlRgba8 = 0x8058;
-
 void* GetProcAddress(void*, const char* name) {
     QOpenGLContext* context = QOpenGLContext::currentContext();
     if (!context) {
@@ -140,7 +138,7 @@ void MpvVideoWidget::paintGL() {
         static_cast<int>(defaultFramebufferObject()),
         fboWidth,
         fboHeight,
-        kGlRgba8,
+        0,
     };
     int flipY = 1;
     int blockForTargetTime = 0;
