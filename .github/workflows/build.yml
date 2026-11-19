@@ -254,8 +254,20 @@ jobs:
   # 3. Linux Build (Portable .AppImage + Debian/Ubuntu .deb Installer)
   # ============================================================================
   build-linux:
-    name: Linux (AppImage & .deb)
-    runs-on: ubuntu-24.04
+    name: Linux (${{ matrix.name }} AppImage & .deb)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64
+            runner: ubuntu-24.04
+            arch: x86_64
+            artifact: MoviePlayer-linux-x64
+          - name: arm64
+            runner: ubuntu-24.04-arm
+            arch: aarch64
+            artifact: MoviePlayer-linux-arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -300,12 +312,13 @@ jobs:
       - name: Package AppImage (.AppImage) & Debian Installer (.deb)
         run: |
           VERSION="${{ steps.vars.outputs.VERSION }}"
+          ARCH="${{ matrix.arch }}"
           mkdir -p dist
 
           # 1) Debian/Ubuntu .deb package
           pushd build
           cpack -G DEB
-          cp MoviePlayer-*.deb "../dist/MoviePlayer-${VERSION}-linux-x86_64.deb"
+          cp MoviePlayer-*.deb "../dist/MoviePlayer-${VERSION}-linux-${ARCH}.deb"
           popd
 
           # 2) AppImage (.AppImage) via linuxdeploy + linuxdeploy-plugin-qt
@@ -322,16 +335,16 @@ jobs:
           # Convert app.ico to 256x256 PNG icon for AppDir
           convert "res/app.ico[0]" -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/movieplayer.png
 
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+          wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${ARCH}.AppImage"
+          wget -q "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-${ARCH}.AppImage"
+          chmod +x "linuxdeploy-${ARCH}.AppImage" "linuxdeploy-plugin-qt-${ARCH}.AppImage"
 
           export APPIMAGE_EXTRACT_AND_RUN=1
           export NO_STRIP=true
-          export QMAKE=/usr/lib/qt6/bin/qmake
-          export LDAI_OUTPUT="dist/MoviePlayer-${VERSION}-linux-x86_64.AppImage"
+          export QMAKE="$(command -v qmake6 || echo /usr/lib/qt6/bin/qmake)"
+          export LDAI_OUTPUT="dist/MoviePlayer-${VERSION}-linux-${ARCH}.AppImage"
 
-          ./linuxdeploy-x86_64.AppImage \
+          "./linuxdeploy-${ARCH}.AppImage" \
             --appdir AppDir \
             --executable AppDir/usr/bin/MoviePlayer \
             --desktop-file AppDir/usr/share/applications/movieplayer.desktop \
@@ -342,10 +355,10 @@ jobs:
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: MoviePlayer-linux-x64
+          name: ${{ matrix.artifact }}
           path: |
-            dist/MoviePlayer-*-linux-x86_64.AppImage
-            dist/MoviePlayer-*-linux-x86_64.deb
+            dist/MoviePlayer-*-linux-${{ matrix.arch }}.AppImage
+            dist/MoviePlayer-*-linux-${{ matrix.arch }}.deb
           if-no-files-found: error
 
   # ============================================================================

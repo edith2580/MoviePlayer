@@ -13,3 +13,4 @@
 *.user
 CMakeUserPresets.json
 /dist
+/build-ninja-release
