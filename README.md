@@ -11,6 +11,13 @@ C++20 컴파일러, CMake 3.25 이상, **Qt 6** (`Core`, `Gui`, `Widgets`, `Open
 ### Windows
 Visual Studio 2026의 "C++를 사용한 데스크톱 개발" 워크로드와 Qt6(MSVC x64)가 필요합니다. `libmpv`는 처음 구성할 때 `third_party/`에 자동으로 받습니다.
 
+cmake 찾이 못할때
+
+```powershell
+$env:PATH = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;$env:PATH"
+```
+
+빌드
 ```powershell
 cmake --preset vs2026-x64 -DCMAKE_PREFIX_PATH="C:/Qt/6.8.0/msvc2022_64"
 cmake --build --preset release

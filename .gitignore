@@ -12,3 +12,4 @@
 /.vs/
 *.user
 CMakeUserPresets.json
+/dist

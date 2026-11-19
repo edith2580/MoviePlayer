@@ -185,11 +185,42 @@ endif()
 if(WIN32)
     install(TARGETS MoviePlayer RUNTIME DESTINATION .)
     install(FILES "$<TARGET_FILE:libmpv>" LICENSE res/THIRD_PARTY_NOTICES.txt DESTINATION .)
+    if(WINDEPLOYQT_EXECUTABLE)
+        install(CODE "
+            execute_process(
+                COMMAND \"${WINDEPLOYQT_EXECUTABLE}\"
+                    --no-translations
+                    --no-system-d3d-compiler
+                    --no-opengl-sw
+                    \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/MoviePlayer.exe\"
+                RESULT_VARIABLE _windeployqt_res
+            )
+            if(NOT _windeployqt_res EQUAL 0)
+                message(FATAL_ERROR \"windeployqt failed during install/package\")
+            endif()
+        ")
+    endif()
     set(CPACK_GENERATOR ZIP)
     set(CPACK_PACKAGE_FILE_NAME "MoviePlayer-${PROJECT_VERSION}-win64")
 elseif(APPLE)
     install(TARGETS MoviePlayer BUNDLE DESTINATION .)
     install(FILES LICENSE res/THIRD_PARTY_NOTICES.txt DESTINATION .)
+    get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(QT_MACDEPLOYQT_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
+    find_program(MACDEPLOYQT_EXECUTABLE macdeployqt HINTS "${QT_MACDEPLOYQT_DIR}")
+    if(MACDEPLOYQT_EXECUTABLE)
+        install(CODE "
+            execute_process(
+                COMMAND \"${MACDEPLOYQT_EXECUTABLE}\"
+                    \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/MoviePlayer.app\"
+                    -always-overwrite
+                RESULT_VARIABLE _macdeployqt_res
+            )
+            if(NOT _macdeployqt_res EQUAL 0)
+                message(FATAL_ERROR \"macdeployqt failed during install/package\")
+            endif()
+        ")
+    endif()
     set(CPACK_GENERATOR DragNDrop)
     set(CPACK_PACKAGE_FILE_NAME "MoviePlayer-${PROJECT_VERSION}-macos")
 else()
