@@ -101,9 +101,8 @@ class MpvPlayer : public QObject {
     Q_OBJECT
 
 public:
-    // If videoWindowId is given (Windows), renders directly into that native window via "wid".
-    // Otherwise (macOS/Linux), configures vo=libmpv for QOpenGLWidget's mpv_render_context.
-    MpvPlayer(std::optional<int64_t> videoWindowId, double volume, SubtitleEncoding subtitleEncoding,
+    // Configures vo=libmpv for QOpenGLWidget's mpv_render_context.
+    MpvPlayer(double volume, SubtitleEncoding subtitleEncoding,
               const std::array<int, kVideoAdjustmentCount>& videoAdjustments,
               const SubtitleStyle& subtitleStyle, QObject* parent = nullptr);
     ~MpvPlayer() override;

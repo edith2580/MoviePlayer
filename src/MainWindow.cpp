@@ -124,7 +124,7 @@ MainWindow::MainWindow(const Settings& settings, QWidget* parent)
     setAttribute(Qt::WA_InputMethodEnabled, false);
 
     videoWidget_ = new MpvVideoWidget(this);
-    player_ = new MpvPlayer(videoWidget_->NativeWindowId(), settings.volume, settings.subtitleEncoding,
+    player_ = new MpvPlayer(settings.volume, settings.subtitleEncoding,
                             settings.videoAdjustments, settings.preferences.subtitleStyle, this);
     videoWidget_->AttachPlayer(player_);
     controlBar_ = new ControlBar(this);
@@ -947,6 +947,7 @@ void MainWindow::LayoutChildren() {
         const int barH = std::min(h, ControlBar::kBarHeight);
         const QRect localBarRect(0, h - barH, uncoveredW, barH);
         controlBar_->SetTargetGeometry(localBarRect, h);
+        controlBar_->raise();
     }
     if (panelOpen && fullscreen_) {
         playlistPanel_->raise();

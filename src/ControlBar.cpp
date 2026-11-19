@@ -2,7 +2,6 @@
 
 #include <QEasingCurve>
 #include <QFont>
-#include <QImage>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
@@ -13,10 +12,6 @@
 #include <cmath>
 
 #include "TimeFormat.h"
-
-#if defined(Q_OS_WIN)
-using Microsoft::WRL::ComPtr;
-#endif
 
 namespace {
 
@@ -68,39 +63,26 @@ ControlBar::ControlBar(QWidget* parent) : QWidget(parent) {
     fadeAnimation_->setEasingCurve(QEasingCurve::OutCubic);
     connect(fadeAnimation_, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
         opacity_ = value.toReal();
-        RequestRepaint();
+        update();
     });
     connect(fadeAnimation_, &QVariantAnimation::finished, this, [this] {
         if (!barVisible_) {
             opacity_ = 0.0;
-#if defined(Q_OS_WIN)
-            RenderToDComp();
-#else
             QWidget::hide();
-#endif
         }
     });
 
     QWidget::hide();
 }
 
-ControlBar::~ControlBar() {
-#if defined(Q_OS_WIN)
-    ReleaseDCompResources();
-#endif
-}
-
-void ControlBar::SetTargetGeometry(const QRect& localInMainWindow, int mainClientHeight) {
-    const bool changed = (localRect_ != localInMainWindow || mainClientHeight_ != mainClientHeight);
+void ControlBar::SetTargetGeometry(const QRect& localInMainWindow, int) {
+    const bool changed = (localRect_ != localInMainWindow);
     localRect_ = localInMainWindow;
-    mainClientHeight_ = mainClientHeight;
-#if !defined(Q_OS_WIN)
     if (geometry() != localInMainWindow) {
         setGeometry(localInMainWindow);
     }
-#endif
     if (changed) {
-        RequestRepaint();
+        update();
     }
 }
 
@@ -109,12 +91,10 @@ void ControlBar::SetBarVisible(bool visible) {
         return;
     }
     barVisible_ = visible;
-#if !defined(Q_OS_WIN)
     if (visible) {
         QWidget::show();
         raise();
     }
-#endif
     fadeAnimation_->stop();
     fadeAnimation_->setStartValue(opacity_);
     fadeAnimation_->setEndValue(visible ? 1.0 : 0.0);
@@ -124,37 +104,29 @@ void ControlBar::SetBarVisible(bool visible) {
 void ControlBar::SetFullscreenState(bool fullscreen) {
     if (fullscreen_ != fullscreen) {
         fullscreen_ = fullscreen;
-        RequestRepaint();
+        update();
     }
 }
 
 void ControlBar::SetPlayback(const PlaybackState& state) {
     playback_ = state;
     if (barVisible_ || opacity_ > 0.0) {
-        RequestRepaint();
+        update();
     }
 }
 
 void ControlBar::SetSeekPreview(std::optional<double> position) {
     if (seekPreview_ != position) {
         seekPreview_ = position;
-        RequestRepaint();
+        update();
     }
 }
 
 void ControlBar::SetHoveredPart(Part part) {
     if (hovered_ != part) {
         hovered_ = part;
-        RequestRepaint();
+        update();
     }
-}
-
-void ControlBar::RequestRepaint() {
-#if defined(Q_OS_WIN)
-    RenderToDComp();
-#else
-    update();
-#endif
 }
 
 ControlBar::Layout ControlBar::ComputeLayout() const {
@@ -445,131 +417,9 @@ void ControlBar::RenderBarContents(QPainter& painter) {
 }
 
 void ControlBar::paintEvent(QPaintEvent*) {
-#if !defined(Q_OS_WIN)
     if (localRect_.width() <= 0 || localRect_.height() <= 0 || opacity_ <= 0.0) {
         return;
     }
     QPainter painter(this);
     RenderBarContents(painter);
-#endif
 }
-
-#if defined(Q_OS_WIN)
-
-bool ControlBar::EnsureDCompResources() {
-    if (compositionDevice_ && compositionTarget_ && visual_) {
-        return true;
-    }
-    QWidget* owner = parentWidget();
-    if (!owner) {
-        return false;
-    }
-    const HWND mainHwnd = reinterpret_cast<HWND>(owner->winId());
-    if (!mainHwnd) {
-        return false;
-    }
-
-    const UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0,
-                                   D3D11_SDK_VERSION, &d3dDevice_, nullptr, &d3dContext_);
-    if (FAILED(hr)) {
-        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, nullptr, 0,
-                               D3D11_SDK_VERSION, &d3dDevice_, nullptr, &d3dContext_);
-    }
-    if (FAILED(hr)) {
-        return false;
-    }
-
-    ComPtr<IDXGIDevice> dxgiDevice;
-    ComPtr<IDXGIAdapter> adapter;
-    if (FAILED(d3dDevice_.As(&dxgiDevice)) ||
-        FAILED(dxgiDevice->GetAdapter(&adapter)) ||
-        FAILED(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory_))) ||
-        FAILED(DCompositionCreateDevice(dxgiDevice.Get(), IID_PPV_ARGS(&compositionDevice_))) ||
-        FAILED(compositionDevice_->CreateTargetForHwnd(mainHwnd, TRUE, &compositionTarget_)) ||
-        FAILED(compositionDevice_->CreateVisual(&visual_))) {
-        ReleaseDCompResources();
-        return false;
-    }
-    return true;
-}
-
-void ControlBar::ReleaseDCompResources() {
-    swapChain_.Reset();
-    visual_.Reset();
-    compositionTarget_.Reset();
-    compositionDevice_.Reset();
-    dxgiFactory_.Reset();
-    d3dContext_.Reset();
-    d3dDevice_.Reset();
-    swapChainWidth_ = 0;
-    swapChainHeight_ = 0;
-}
-
-void ControlBar::RenderToDComp() {
-    QWidget* owner = parentWidget();
-    if (!owner || !EnsureDCompResources()) {
-        return;
-    }
-
-    const bool show = (barVisible_ || opacity_ > 0.0) && localRect_.width() > 0 && localRect_.height() > 0;
-    if (!show) {
-        compositionTarget_->SetRoot(nullptr);
-        compositionDevice_->Commit();
-        return;
-    }
-
-    const qreal dpr = owner->devicePixelRatioF() > 0.0 ? owner->devicePixelRatioF() : 1.0;
-    const int physW = std::max(1, static_cast<int>(std::lround(localRect_.width() * dpr)));
-    const int physH = std::max(1, static_cast<int>(std::lround(localRect_.height() * dpr)));
-    const int physClientH = std::max(physH, static_cast<int>(std::lround(mainClientHeight_ * dpr)));
-
-    if (!swapChain_ || swapChainWidth_ != physW || swapChainHeight_ != physH) {
-        if (swapChain_) {
-            if (FAILED(swapChain_->ResizeBuffers(0, static_cast<UINT>(physW), static_cast<UINT>(physH), DXGI_FORMAT_UNKNOWN, 0))) {
-                ReleaseDCompResources();
-                return;
-            }
-        } else {
-            DXGI_SWAP_CHAIN_DESC1 desc{};
-            desc.Width = static_cast<UINT>(physW);
-            desc.Height = static_cast<UINT>(physH);
-            desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            desc.SampleDesc.Count = 1;
-            desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            desc.BufferCount = 2;
-            desc.Scaling = DXGI_SCALING_STRETCH;
-            desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-            desc.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
-            if (FAILED(dxgiFactory_->CreateSwapChainForComposition(d3dDevice_.Get(), &desc, nullptr, &swapChain_)) ||
-                FAILED(visual_->SetContent(swapChain_.Get()))) {
-                ReleaseDCompResources();
-                return;
-            }
-        }
-        swapChainWidth_ = physW;
-        swapChainHeight_ = physH;
-    }
-
-    QImage image(physW, physH, QImage::Format_ARGB32_Premultiplied);
-    image.setDevicePixelRatio(dpr);
-    image.fill(Qt::transparent);
-    {
-        QPainter painter(&image);
-        RenderBarContents(painter);
-    }
-
-    ComPtr<ID3D11Texture2D> backBuffer;
-    if (FAILED(swapChain_->GetBuffer(0, IID_PPV_ARGS(&backBuffer)))) {
-        return;
-    }
-    d3dContext_->UpdateSubresource(backBuffer.Get(), 0, nullptr, image.constBits(), static_cast<UINT>(image.bytesPerLine()), 0);
-    swapChain_->Present(0, 0);
-
-    visual_->SetOffsetX(0.0f);
-    visual_->SetOffsetY(static_cast<float>(physClientH - physH));
-    compositionTarget_->SetRoot(visual_.Get());
-    compositionDevice_->Commit();
-}
-
-#endif

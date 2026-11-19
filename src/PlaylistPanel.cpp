@@ -160,10 +160,6 @@ private:
 
 PlaylistPanel::PlaylistPanel(Callbacks callbacks, QWidget* parent)
     : QWidget(parent), callbacks_(std::move(callbacks)) {
-#if defined(Q_OS_WIN)
-    // Needed on Windows so the panel stacks above mpv's native video HWND in fullscreen mode.
-    setAttribute(Qt::WA_NativeWindow, true);
-#endif
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     setMouseTracking(true);
     setAcceptDrops(true);

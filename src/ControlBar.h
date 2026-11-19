@@ -9,25 +9,13 @@
 #include <optional>
 #include <vector>
 
-#if defined(Q_OS_WIN)
-#include <windows.h>
-#include <d3d11.h>
-#include <dcomp.h>
-#include <dxgi1_2.h>
-#include <wrl/client.h>
-#endif
-
 #include "MpvPlayer.h"
 
 class QPainter;
 class QVariantAnimation;
 
-// The playback controls drawn over the bottom of the video area.
-// - On Windows: rendered with QPainter into a premultiplied ARGB QImage and
-//   composited directly inside MainWindow's HWND via DirectComposition so it
-//   sits above mpv's native D3D11 video HWND and never leaves MainWindow.
-// - On macOS & Linux: rendered directly as a translucent child QWidget above
-//   MpvVideoWidget (QOpenGLWidget).
+// The playback controls drawn over the bottom of the video area as a
+// translucent child QWidget above MpvVideoWidget (QOpenGLWidget).
 class ControlBar : public QWidget {
     Q_OBJECT
 
@@ -37,7 +25,7 @@ public:
     static constexpr int kBarHeight = 72;
 
     explicit ControlBar(QWidget* parent = nullptr);
-    ~ControlBar() override;
+    ~ControlBar() override = default;
 
     ControlBar(const ControlBar&) = delete;
     ControlBar& operator=(const ControlBar&) = delete;
@@ -99,27 +87,9 @@ private:
     void DrawFullscreenIcon(QPainter& painter, const Layout& layout, const Frame& frame);
     void DrawSeekTrack(QPainter& painter, const Layout& layout, const Frame& frame);
     void DrawVolume(QPainter& painter, const Layout& layout, const Frame& frame);
-    void RequestRepaint();
-
-#if defined(Q_OS_WIN)
-    bool EnsureDCompResources();
-    void ReleaseDCompResources();
-    void RenderToDComp();
-
-    Microsoft::WRL::ComPtr<ID3D11Device> d3dDevice_;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3dContext_;
-    Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory_;
-    Microsoft::WRL::ComPtr<IDCompositionDevice> compositionDevice_;
-    Microsoft::WRL::ComPtr<IDCompositionTarget> compositionTarget_;
-    Microsoft::WRL::ComPtr<IDCompositionVisual> visual_;
-    Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain_;
-    int swapChainWidth_ = 0;
-    int swapChainHeight_ = 0;
-#endif
 
     QVariantAnimation* fadeAnimation_ = nullptr;
     QRect localRect_;
-    int mainClientHeight_ = 0;
     qreal opacity_ = 0.0;
 
     bool barVisible_ = false;

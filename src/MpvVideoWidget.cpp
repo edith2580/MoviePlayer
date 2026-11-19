@@ -1,42 +1,5 @@
 #include "MpvVideoWidget.h"
 
-#if defined(Q_OS_WIN)
-#include <windows.h>
-
-MpvVideoWidget::MpvVideoWidget(QWidget* parent) : QWidget(parent) {
-    setAttribute(Qt::WA_NativeWindow, true);
-    setAttribute(Qt::WA_DontCreateNativeAncestors, true);
-    setAttribute(Qt::WA_OpaquePaintEvent, true);
-    setAttribute(Qt::WA_NoSystemBackground, true);
-    setAttribute(Qt::WA_TransparentForMouseEvents, true);
-    setFocusPolicy(Qt::NoFocus);
-
-    const WId handle = winId();
-    // Windows skips a disabled child HWND when routing mouse clicks, wheel
-    // events, and file drops, sending them directly to MainWindow.
-    EnableWindow(reinterpret_cast<HWND>(handle), FALSE);
-}
-
-MpvVideoWidget::~MpvVideoWidget() = default;
-
-std::optional<int64_t> MpvVideoWidget::NativeWindowId() const {
-    return static_cast<int64_t>(winId());
-}
-
-void MpvVideoWidget::AttachPlayer(MpvPlayer*) {
-}
-
-void MpvVideoWidget::Shutdown() {
-}
-
-void MpvVideoWidget::OnMpvRenderUpdate() {
-}
-
-void MpvVideoWidget::OnFrameSwapped() {
-}
-
-#else
-
 #include <QMetaObject>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
@@ -74,10 +37,6 @@ MpvVideoWidget::MpvVideoWidget(QWidget* parent) : QOpenGLWidget(parent) {
 
 MpvVideoWidget::~MpvVideoWidget() {
     Shutdown();
-}
-
-std::optional<int64_t> MpvVideoWidget::NativeWindowId() const {
-    return std::nullopt;
 }
 
 void MpvVideoWidget::AttachPlayer(MpvPlayer* player) {
@@ -170,5 +129,3 @@ void MpvVideoWidget::OnFrameSwapped() {
         mpv_render_context_report_swap(renderContext_);
     }
 }
-
-#endif

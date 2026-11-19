@@ -149,7 +149,7 @@ if(WIN32)
     if(MSVC)
         target_compile_options(MoviePlayer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>)
     endif()
-    target_link_libraries(MoviePlayer PRIVATE advapi32 shell32 shlwapi user32 dxgi d3d11 dcomp psapi opengl32)
+    target_link_libraries(MoviePlayer PRIVATE advapi32 shell32 shlwapi user32 dxgi psapi opengl32)
 
     # The executable loads libmpv-2.dll from its own folder.
     add_custom_command(TARGET MoviePlayer POST_BUILD

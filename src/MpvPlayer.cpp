@@ -146,7 +146,7 @@ Chapter ChapterFromNode(const mpv_node& node) {
 
 }  // namespace
 
-MpvPlayer::MpvPlayer(std::optional<int64_t> videoWindowId, double volume, SubtitleEncoding subtitleEncoding,
+MpvPlayer::MpvPlayer(double volume, SubtitleEncoding subtitleEncoding,
                      const std::array<int, kVideoAdjustmentCount>& videoAdjustments,
                      const SubtitleStyle& subtitleStyle, QObject* parent)
     : QObject(parent) {
@@ -163,21 +163,15 @@ MpvPlayer::MpvPlayer(std::optional<int64_t> videoWindowId, double volume, Subtit
 
     try {
         EnableLogFileIfRequested(mpv_);
-        if (videoWindowId) {
-            int64_t wid = *videoWindowId;
-            Check(mpv_set_property(mpv_, "wid", MPV_FORMAT_INT64, &wid), "set wid");
-            Check(mpv_set_property_string(mpv_, "hwdec", "auto-safe"), "set hwdec");
-        } else {
-            Check(mpv_set_property_string(mpv_, "vo", "libmpv"), "set vo=libmpv");
-#if defined(Q_OS_LINUX)
-            // On Linux QOpenGLWidget (X11/Wayland/Mesa/virgl), zero-copy hwdec without a native
-            // display handle and 16-bit float intermediate FBOs can cause severe video noise.
-            Check(mpv_set_property_string(mpv_, "hwdec", "auto-copy"), "set hwdec");
-            mpv_set_property_string(mpv_, "fbo-format", "rgba8");
+        Check(mpv_set_property_string(mpv_, "vo", "libmpv"), "set vo=libmpv");
+#if defined(Q_OS_MACOS)
+        Check(mpv_set_property_string(mpv_, "hwdec", "auto-safe"), "set hwdec");
 #else
-            Check(mpv_set_property_string(mpv_, "hwdec", "auto-safe"), "set hwdec");
+        // With QOpenGLWidget (mpv_render_context), zero-copy hwdec without a native display
+        // handle and 16-bit float intermediate FBOs can cause severe video noise.
+        Check(mpv_set_property_string(mpv_, "hwdec", "auto-copy"), "set hwdec");
+        mpv_set_property_string(mpv_, "fbo-format", "rgba8");
 #endif
-        }
         // Hold the last frame at the end, so seeking past the end doesn't close the file.
         Check(mpv_set_property_string(mpv_, "keep-open", "yes"), "set keep-open");
         // Also pick up subtitles named like "movie.ko.srt", and prefer Korean tracks inside files.
