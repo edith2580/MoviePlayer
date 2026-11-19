@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Movie Player
+GenericName=Media Player
+Comment=Qt6 and libmpv based video player
+Exec=MoviePlayer %U
+Icon=movieplayer
+Terminal=false
+Categories=AudioVideo;Video;Player;Qt;
+MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/x-ms-wmv;video/webm;video/mp2t;video/x-flv;video/mpeg;video/3gpp;video/ogg;application/x-subrip;text/x-ssa;text/vtt;
+StartupWMClass=MoviePlayer

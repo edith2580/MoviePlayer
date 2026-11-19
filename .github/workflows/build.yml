@@ -1,0 +1,370 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: "6.8.2"
+
+jobs:
+  # ============================================================================
+  # 1. Windows Build (Portable .zip + Inno Setup Installer .exe)
+  # ============================================================================
+  build-windows:
+    name: Windows (Portable & Installer)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Extract version
+        id: vars
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}" -like "refs/tags/v*") {
+            $ver = "${{ github.ref_name }}".TrimStart('v')
+          } else {
+            $cmake = Get-Content CMakeLists.txt -Raw
+            if ($cmake -match 'project\(MoviePlayer\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)') {
+              $ver = $Matches[1]
+            } else {
+              $ver = "0.1.0"
+            }
+          }
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Configure and Build (Release)
+        shell: pwsh
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel
+
+      - name: Package Portable (.zip) & Installer (.exe)
+        shell: pwsh
+        run: |
+          $version = "${{ steps.vars.outputs.VERSION }}"
+          $portableDir = "${{ github.workspace }}\dist\portable"
+          $distDir = "${{ github.workspace }}\dist"
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+
+          $exePath = "build\Release\MoviePlayer.exe"
+          if (-not (Test-Path $exePath)) {
+            $exePath = "build\MoviePlayer.exe"
+          }
+          $binDir = Split-Path -Parent $exePath
+
+          Copy-Item $exePath -Destination $portableDir
+          Copy-Item "$binDir\libmpv-2.dll" -Destination $portableDir
+          Copy-Item "LICENSE" -Destination $portableDir
+          Copy-Item "res\THIRD_PARTY_NOTICES.txt" -Destination $portableDir
+
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw "$portableDir\MoviePlayer.exe"
+
+          # 1) Create Portable ZIP
+          $zipPath = "$distDir\MoviePlayer-$version-win64-portable.zip"
+          Compress-Archive -Path "$portableDir\*" -DestinationPath $zipPath -Force
+
+          # 2) Create Setup EXE via Inno Setup 6
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc `
+            "/DMyAppVersion=$version" `
+            "/DSourceDir=$portableDir" `
+            "/DRepoRoot=${{ github.workspace }}" `
+            "/DOutputDir=$distDir" `
+            "packaging\windows\installer.iss"
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoviePlayer-windows-x64
+          path: |
+            dist/MoviePlayer-*-win64-portable.zip
+            dist/MoviePlayer-*-win64-setup.exe
+          if-no-files-found: error
+
+  # ============================================================================
+  # 2. macOS Build (.app Bundle + Code Signing + Notarization + .dmg)
+  # ============================================================================
+  build-macos:
+    name: macOS (.dmg & Code Sign)
+    runs-on: macos-latest
+    env:
+      MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies (Homebrew)
+        run: |
+          brew update
+          brew install qt@6 mpv pkg-config ninja dylibbundler
+
+      - name: Extract version
+        id: vars
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER=$(sed -n 's/.*project(MoviePlayer VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+            VER=${VER:-0.1.0}
+          fi
+          echo "VERSION=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Configure and Build
+        run: |
+          QT_PREFIX="$(brew --prefix qt@6)"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_PREFIX"
+          cmake --build build --parallel
+
+      - name: Bundle Icon, Qt Frameworks, and libmpv
+        run: |
+          APP_BUNDLE="build/MoviePlayer.app"
+          mkdir -p "$APP_BUNDLE/Contents/Resources"
+
+          # Generate app.icns from res/app.ico
+          ICONSET_DIR="$RUNNER_TEMP/app.iconset"
+          mkdir -p "$ICONSET_DIR"
+          sips -s format png res/app.ico --out "$RUNNER_TEMP/base.png"
+          for SIZE in 16 32 128 256 512; do
+            sips -z $SIZE $SIZE "$RUNNER_TEMP/base.png" --out "$ICONSET_DIR/icon_${SIZE}x${SIZE}.png"
+            DOUBLE=$((SIZE * 2))
+            sips -z $DOUBLE $DOUBLE "$RUNNER_TEMP/base.png" --out "$ICONSET_DIR/icon_${SIZE}x${SIZE}@2x.png"
+          done
+          iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/app.icns" || true
+
+          # Bundle Qt6 frameworks and plugins
+          "$(brew --prefix qt@6)/bin/macdeployqt" "$APP_BUNDLE" -always-overwrite
+
+          # Bundle libmpv and non-system dylibs into Contents/Frameworks
+          dylibbundler -od -b \
+            -x "$APP_BUNDLE/Contents/MacOS/MoviePlayer" \
+            -d "$APP_BUNDLE/Contents/Frameworks/" \
+            -p "@executable_path/../Frameworks/"
+
+      - name: Import Code Signing Certificate & Sign App Bundle
+        run: |
+          APP_BUNDLE="build/MoviePlayer.app"
+          if [[ -n "$MACOS_CERTIFICATE_P12" && -n "$MACOS_CERTIFICATE_PASSWORD" && -n "$MACOS_SIGNING_IDENTITY" ]]; then
+            echo "Code signing certificate secrets found. Setting up temporary keychain..."
+            KEYCHAIN_PATH="$RUNNER_TEMP/build-signing.keychain-db"
+            KEYCHAIN_PASS="${MACOS_KEYCHAIN_PASSWORD:-$(uuidgen)}"
+            CERT_PATH="$RUNNER_TEMP/certificate.p12"
+
+            echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+
+            security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+
+            security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+            security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+            # Sign all bundled dylibs and frameworks first
+            find "$APP_BUNDLE/Contents/Frameworks" "$APP_BUNDLE/Contents/PlugIns" -type f \( -name "*.dylib" -o -perm +111 \) 2>/dev/null | while read -r BIN; do
+              codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$BIN" || true
+            done
+            find "$APP_BUNDLE/Contents/Frameworks" -name "*.framework" -type d 2>/dev/null | while read -r FW; do
+              codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$FW" || true
+            done
+
+            # Sign the main app bundle with hardened runtime and entitlements
+            codesign --force --deep --options runtime --timestamp \
+              --entitlements packaging/macos/entitlements.plist \
+              --sign "$MACOS_SIGNING_IDENTITY" "$APP_BUNDLE"
+
+            codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          else
+            echo "::notice::MACOS_CERTIFICATE_P12 / MACOS_SIGNING_IDENTITY secrets are not configured. Using ad-hoc signing."
+            codesign --force --deep --sign - "$APP_BUNDLE"
+          fi
+
+      - name: Create DMG & Notarize (if configured)
+        run: |
+          VERSION="${{ steps.vars.outputs.VERSION }}"
+          mkdir -p dist/dmg_root
+          cp -R "build/MoviePlayer.app" dist/dmg_root/
+          ln -s /Applications dist/dmg_root/Applications
+          cp LICENSE res/THIRD_PARTY_NOTICES.txt dist/dmg_root/
+
+          DMG_PATH="dist/MoviePlayer-${VERSION}-macos.dmg"
+          hdiutil create -volname "Movie Player" -srcfolder dist/dmg_root -ov -format UDZO "$DMG_PATH"
+
+          if [[ -n "$MACOS_CERTIFICATE_P12" && -n "$MACOS_SIGNING_IDENTITY" ]]; then
+            codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$DMG_PATH"
+
+            if [[ -n "$APPLE_ID" && -n "$APPLE_APP_SPECIFIC_PASSWORD" && -n "$APPLE_TEAM_ID" ]]; then
+              echo "Submitting DMG for Apple Notarization..."
+              xcrun notarytool submit "$DMG_PATH" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" \
+                --wait
+              xcrun stapler staple "$DMG_PATH"
+            fi
+          fi
+
+      - name: Clean up temporary Keychain
+        if: always()
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build-signing.keychain-db"
+          if [[ -f "$KEYCHAIN_PATH" ]]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoviePlayer-macos
+          path: dist/MoviePlayer-*-macos.dmg
+          if-no-files-found: error
+
+  # ============================================================================
+  # 3. Linux Build (Portable .AppImage + Debian/Ubuntu .deb Installer)
+  # ============================================================================
+  build-linux:
+    name: Linux (AppImage & .deb)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Qt6 and libmpv dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            qt6-base-dev \
+            qt6-wayland \
+            libqt6opengl6-dev \
+            libmpv-dev \
+            libgl1-mesa-dev \
+            libxcb-cursor0 \
+            dpkg-dev \
+            desktop-file-utils \
+            imagemagick \
+            patchelf \
+            wget \
+            file
+
+      - name: Extract version
+        id: vars
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER=$(sed -n 's/.*project(MoviePlayer VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+            VER=${VER:-0.2.0}
+          fi
+          echo "VERSION=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Configure and Build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: Package AppImage (.AppImage) & Debian Installer (.deb)
+        run: |
+          VERSION="${{ steps.vars.outputs.VERSION }}"
+          mkdir -p dist
+
+          # 1) Debian/Ubuntu .deb package
+          pushd build
+          cpack -G DEB
+          cp MoviePlayer-*.deb "../dist/MoviePlayer-${VERSION}-linux-x86_64.deb"
+          popd
+
+          # 2) AppImage (.AppImage) via linuxdeploy + linuxdeploy-plugin-qt
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p AppDir/usr/share/doc/movieplayer
+
+          cp build/MoviePlayer AppDir/usr/bin/MoviePlayer
+          strip AppDir/usr/bin/MoviePlayer
+          cp packaging/linux/movieplayer.desktop AppDir/usr/share/applications/movieplayer.desktop
+          cp LICENSE res/THIRD_PARTY_NOTICES.txt AppDir/usr/share/doc/movieplayer/
+
+          # Convert app.ico to 256x256 PNG icon for AppDir
+          convert "res/app.ico[0]" -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/movieplayer.png
+
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export NO_STRIP=true
+          export QMAKE=/usr/lib/qt6/bin/qmake
+          export LDAI_OUTPUT="dist/MoviePlayer-${VERSION}-linux-x86_64.AppImage"
+
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/MoviePlayer \
+            --desktop-file AppDir/usr/share/applications/movieplayer.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/movieplayer.png \
+            --plugin qt \
+            --output appimage
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoviePlayer-linux-x64
+          path: |
+            dist/MoviePlayer-*-linux-x86_64.AppImage
+            dist/MoviePlayer-*-linux-x86_64.deb
+          if-no-files-found: error
+
+  # ============================================================================
+  # 4. Publish GitHub Release (on v* tag push)
+  # ============================================================================
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
