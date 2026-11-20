@@ -9,6 +9,7 @@
 #include <QString>
 #include <QStringList>
 #include <QSurfaceFormat>
+#include <QUrl>
 
 #include <exception>
 #include <functional>
@@ -22,7 +23,16 @@ constexpr int kConnectTimeoutMs = 1500;
 constexpr int kWriteTimeoutMs = 3000;
 
 QString NormalizeInputPath(const QString& rawPath) {
-    if (rawPath.isEmpty() || rawPath.contains(QStringLiteral("://"))) {
+    if (rawPath.isEmpty()) {
+        return rawPath;
+    }
+    if (rawPath.startsWith(QStringLiteral("file://"), Qt::CaseInsensitive)) {
+        const QUrl url(rawPath);
+        if (url.isLocalFile()) {
+            return QDir::toNativeSeparators(QFileInfo(url.toLocalFile()).absoluteFilePath());
+        }
+    }
+    if (rawPath.contains(QStringLiteral("://"))) {
         return rawPath;
     }
     return QDir::toNativeSeparators(QFileInfo(rawPath).absoluteFilePath());

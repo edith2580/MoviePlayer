@@ -5,7 +5,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QIcon>
+#include <QPixmap>
 #include <QProcess>
+#include <QStandardPaths>
 #include <QUrl>
 
 #include "FileDialogs.h"
@@ -154,15 +157,229 @@ void OpenDefaultAppsSettings() {
 
 #elif defined(Q_OS_LINUX)
 
+#include <QStringList>
+
 namespace {
 
+constexpr const char* kDesktopFileName = "movieplayer.desktop";
+
+constexpr std::array<const char*, 27> kLinuxMimeTypes{
+    "video/mp4",
+    "video/x-matroska",
+    "application/x-matroska",
+    "video/x-msvideo",
+    "video/avi",
+    "video/quicktime",
+    "video/x-ms-wmv",
+    "video/webm",
+    "video/mp2t",
+    "video/x-m4v",
+    "video/x-flv",
+    "video/mpeg",
+    "video/mp2p",
+    "video/3gpp",
+    "video/3gpp2",
+    "video/ogg",
+    "video/x-ogm+ogg",
+    "video/x-theora+ogg",
+    "video/x-ms-asf",
+    "application/vnd.ms-asf",
+    "application/x-subrip",
+    "text/x-ssa",
+    "text/vtt",
+    "application/x-sami",
+    "application/smil",
+    "application/smil+xml",
+    "text/x-microdvd",
+};
+
+QString DataHomeDir() {
+    QString dir = qEnvironmentVariable("XDG_DATA_HOME");
+    if (dir.isEmpty()) {
+        dir = QDir::homePath() + QStringLiteral("/.local/share");
+    }
+    return dir;
+}
+
+QString ConfigHomeDir() {
+    QString dir = qEnvironmentVariable("XDG_CONFIG_HOME");
+    if (dir.isEmpty()) {
+        dir = QDir::homePath() + QStringLiteral("/.config");
+    }
+    return dir;
+}
+
 QString DesktopFilePath() {
-    const QString dataHome = qEnvironmentVariable("XDG_DATA_HOME", QDir::homePath() + QStringLiteral("/.local/share"));
-    return dataHome + QStringLiteral("/applications/movieplayer.desktop");
+    return DataHomeDir() + QStringLiteral("/applications/") + QLatin1String(kDesktopFileName);
+}
+
+QString IconFilePath() {
+    return DataHomeDir() + QStringLiteral("/icons/hicolor/256x256/apps/movieplayer.png");
+}
+
+QString MimeAppsListPath() {
+    return ConfigHomeDir() + QStringLiteral("/mimeapps.list");
+}
+
+QString PersistentExecutablePath() {
+    // Inside an AppImage, applicationFilePath() points to an ephemeral /tmp/.mount_* path.
+    // $APPIMAGE holds the actual persistent .AppImage path.
+    const QString appImage = qEnvironmentVariable("APPIMAGE");
+    if (!appImage.isEmpty() && QFileInfo::exists(appImage)) {
+        return QFileInfo(appImage).absoluteFilePath();
+    }
+    return QCoreApplication::applicationFilePath();
+}
+
+QString EscapeDesktopExecArg(const QString& arg) {
+    QString escaped;
+    escaped.reserve(arg.size() + 8);
+    for (const QChar ch : arg) {
+        if (ch == QLatin1Char('\\') || ch == QLatin1Char('"') ||
+            ch == QLatin1Char('$') || ch == QLatin1Char('`')) {
+            escaped.append(QLatin1Char('\\'));
+        }
+        escaped.append(ch);
+    }
+    return escaped;
 }
 
 QString ExpectedExecLine() {
-    return QStringLiteral("Exec=\"%1\" %U").arg(QCoreApplication::applicationFilePath());
+    return QStringLiteral("Exec=\"%1\" %F").arg(EscapeDesktopExecArg(PersistentExecutablePath()));
+}
+
+QString MimeTypeListString() {
+    QString result;
+    for (const char* mime : kLinuxMimeTypes) {
+        result += QLatin1String(mime);
+        result += QLatin1Char(';');
+    }
+    return result;
+}
+
+// Updates [Added Associations] (and clears [Removed Associations] on register)
+// in ~/.config/mimeapps.list without altering [Default Applications].
+void UpdateMimeAppsList(bool add) {
+    const QString path = MimeAppsListPath();
+    QStringList lines;
+    {
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QString content = QString::fromUtf8(file.readAll());
+            lines = content.split(QLatin1Char('\n'));
+            if (!lines.isEmpty() && lines.last().isEmpty()) {
+                lines.removeLast();
+            }
+        }
+    }
+
+    const QString desktopId = QLatin1String(kDesktopFileName);
+    QStringList outLines;
+    outLines.reserve(lines.size() + static_cast<qsizetype>(kLinuxMimeTypes.size()) + 4);
+
+    QString currentSection;
+    bool hasAddedSection = false;
+    QStringList seenInAdded;
+
+    auto appendMissingAdded = [&] {
+        if (!add) {
+            return;
+        }
+        for (const char* rawMime : kLinuxMimeTypes) {
+            const QString mime = QLatin1String(rawMime);
+            if (!seenInAdded.contains(mime)) {
+                outLines.append(mime + QLatin1Char('=') + desktopId + QLatin1Char(';'));
+            }
+        }
+    };
+
+    for (const QString& rawLine : lines) {
+        const QString trimmed = rawLine.trimmed();
+        if (trimmed.startsWith(QLatin1Char('[')) && trimmed.endsWith(QLatin1Char(']'))) {
+            if (currentSection == QLatin1String("[Added Associations]")) {
+                appendMissingAdded();
+            }
+            currentSection = trimmed;
+            if (currentSection == QLatin1String("[Added Associations]")) {
+                hasAddedSection = true;
+            }
+            outLines.append(rawLine);
+            continue;
+        }
+
+        const bool inAdded = (currentSection == QLatin1String("[Added Associations]"));
+        const bool inRemoved = (currentSection == QLatin1String("[Removed Associations]"));
+        const qsizetype eq = rawLine.indexOf(QLatin1Char('='));
+        if ((inAdded || inRemoved) && eq > 0) {
+            const QString mime = rawLine.left(eq).trimmed();
+            bool isOurs = false;
+            for (const char* m : kLinuxMimeTypes) {
+                if (mime == QLatin1String(m)) {
+                    isOurs = true;
+                    break;
+                }
+            }
+            if (isOurs) {
+                QStringList entries = rawLine.mid(eq + 1).split(QLatin1Char(';'), Qt::SkipEmptyParts);
+                for (QString& e : entries) {
+                    e = e.trimmed();
+                }
+                entries.removeAll(QString());
+
+                if (inAdded) {
+                    seenInAdded.append(mime);
+                    if (add) {
+                        if (!entries.contains(desktopId)) {
+                            entries.append(desktopId);
+                        }
+                    } else {
+                        entries.removeAll(desktopId);
+                    }
+                } else if (inRemoved && add) {
+                    entries.removeAll(desktopId);
+                }
+
+                if (!entries.isEmpty()) {
+                    outLines.append(mime + QLatin1Char('=') + entries.join(QLatin1Char(';')) + QLatin1Char(';'));
+                }
+                continue;
+            }
+        }
+
+        outLines.append(rawLine);
+    }
+
+    if (currentSection == QLatin1String("[Added Associations]")) {
+        appendMissingAdded();
+    } else if (add && !hasAddedSection) {
+        if (!outLines.isEmpty() && !outLines.last().isEmpty()) {
+            outLines.append(QString());
+        }
+        outLines.append(QStringLiteral("[Added Associations]"));
+        appendMissingAdded();
+    }
+
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile outFile(path);
+    if (outFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        outFile.write((outLines.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8());
+    }
+}
+
+void InstallUserIcon() {
+    const QString iconPath = IconFilePath();
+    QDir().mkpath(QFileInfo(iconPath).absolutePath());
+    const QPixmap pixmap = QIcon(QStringLiteral(":/res/app.ico")).pixmap(256, 256);
+    if (!pixmap.isNull()) {
+        pixmap.save(iconPath, "PNG");
+    }
+}
+
+void RefreshDesktopDatabase(const QString& applicationsDir) {
+    const QString tool = QStandardPaths::findExecutable(QStringLiteral("update-desktop-database"));
+    if (!tool.isEmpty()) {
+        QProcess::execute(tool, {applicationsDir});
+    }
 }
 
 }  // namespace
@@ -177,35 +394,64 @@ bool IsFileAssociationRegistered() {
 }
 
 bool RegisterFileAssociation() {
+    InstallUserIcon();
+
     const QString path = DesktopFilePath();
     QDir().mkpath(QFileInfo(path).absolutePath());
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
         return false;
     }
+
+    const QString iconPath = IconFilePath();
+    const QString iconEntry = QFileInfo::exists(iconPath) ? iconPath : QStringLiteral("movieplayer");
     const QString content = QStringLiteral(
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=Movie Player\n"
+        "GenericName=Media Player\n"
         "Comment=mpv 기반 동영상 플레이어\n"
         "%1\n"
+        "Icon=%2\n"
         "Terminal=false\n"
-        "Categories=AudioVideo;Video;Player;\n"
-        "MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/x-ms-wmv;video/webm;video/mp2t;video/x-flv;video/mpeg;video/3gpp;video/ogg;application/x-subrip;text/x-ssa;text/vtt;\n")
-        .arg(ExpectedExecLine());
+        "NoDisplay=false\n"
+        "Categories=AudioVideo;Video;Player;Qt;\n"
+        "StartupWMClass=MoviePlayer\n"
+        "MimeType=%3\n")
+        .arg(ExpectedExecLine(), iconEntry, MimeTypeListString());
     file.write(content.toUtf8());
     file.close();
-    QProcess::execute(QStringLiteral("update-desktop-database"), {QFileInfo(path).absolutePath()});
+
+    UpdateMimeAppsList(true);
+    RefreshDesktopDatabase(QFileInfo(path).absolutePath());
     return true;
 }
 
 void UnregisterFileAssociation() {
     const QString path = DesktopFilePath();
     QFile::remove(path);
-    QProcess::execute(QStringLiteral("update-desktop-database"), {QFileInfo(path).absolutePath()});
+    QFile::remove(IconFilePath());
+    UpdateMimeAppsList(false);
+    RefreshDesktopDatabase(QFileInfo(path).absolutePath());
 }
 
 void OpenDefaultAppsSettings() {
+    struct SettingsLauncher {
+        const char* program;
+        QStringList args;
+    };
+    const SettingsLauncher launchers[] = {
+        {"gnome-control-center", {QStringLiteral("default-apps")}},
+        {"kcmshell6", {QStringLiteral("kcm_componentchooser")}},
+        {"kcmshell5", {QStringLiteral("kcm_componentchooser")}},
+        {"xfce4-mime-settings", {}},
+    };
+    for (const auto& launcher : launchers) {
+        const QString exe = QStandardPaths::findExecutable(QLatin1String(launcher.program));
+        if (!exe.isEmpty() && QProcess::startDetached(exe, launcher.args)) {
+            return;
+        }
+    }
     QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(DesktopFilePath()).absolutePath()));
 }
 
