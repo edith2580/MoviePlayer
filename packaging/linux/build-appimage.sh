@@ -126,8 +126,19 @@ echo "==> Packaging AppImage (${OUT_NAME})..."
 export APPIMAGE_EXTRACT_AND_RUN=1
 export NO_STRIP=true
 export QMAKE="${QMAKE_BIN}"
+export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
 export LDAI_OUTPUT="${LOCAL_OUT}"
 export PATH="${TOOLS_DIR}:${PATH}"
+
+QT_PLUGINS_DIR="$("${QMAKE_BIN}" -query QT_INSTALL_PLUGINS)"
+DEPLOY_DEPS_ARGS=()
+for dir in wayland-decoration-client wayland-graphics-integration-client wayland-shell-integration; do
+    if [[ -d "${QT_PLUGINS_DIR}/${dir}" ]]; then
+        mkdir -p "${APPDIR}/usr/plugins/${dir}"
+        cp -a "${QT_PLUGINS_DIR}/${dir}/." "${APPDIR}/usr/plugins/${dir}/"
+        DEPLOY_DEPS_ARGS+=("--deploy-deps-only=${APPDIR}/usr/plugins/${dir}")
+    fi
+done
 
 "${LINUXDEPLOY}" \
     --appdir "${APPDIR}" \
@@ -135,6 +146,7 @@ export PATH="${TOOLS_DIR}:${PATH}"
     --desktop-file "${APPDIR}/usr/share/applications/movieplayer.desktop" \
     --icon-file "${ICON_DST}" \
     --plugin qt \
+    "${DEPLOY_DEPS_ARGS[@]}" \
     --output appimage
 
 chmod +x "${LOCAL_OUT}"

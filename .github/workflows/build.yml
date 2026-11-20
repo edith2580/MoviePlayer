@@ -356,8 +356,19 @@ jobs:
           export NO_STRIP=true
           export QMAKE="$(command -v qmake6 || echo /usr/lib/qt6/bin/qmake)"
           export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
-          export EXTRA_QT_PLUGINS="wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration"
           export LDAI_OUTPUT="dist/MoviePlayer-${VERSION}-linux-${ARCH}.AppImage"
+
+          # Copy Qt6 Wayland client sub-plugins (needed for wayland-egl / QOpenGLWidget)
+          # and let linuxdeploy bundle their shared library dependencies and patch RPATH.
+          QT_PLUGINS_DIR="$("$QMAKE" -query QT_INSTALL_PLUGINS)"
+          DEPLOY_DEPS_ARGS=()
+          for dir in wayland-decoration-client wayland-graphics-integration-client wayland-shell-integration; do
+            if [ -d "${QT_PLUGINS_DIR}/${dir}" ]; then
+              mkdir -p "AppDir/usr/plugins/${dir}"
+              cp -a "${QT_PLUGINS_DIR}/${dir}/." "AppDir/usr/plugins/${dir}/"
+              DEPLOY_DEPS_ARGS+=("--deploy-deps-only=AppDir/usr/plugins/${dir}")
+            fi
+          done
 
           "./linuxdeploy-${ARCH}.AppImage" \
             --appdir AppDir \
@@ -365,11 +376,13 @@ jobs:
             --desktop-file AppDir/usr/share/applications/movieplayer.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/movieplayer.png \
             --plugin qt \
+            "${DEPLOY_DEPS_ARGS[@]}" \
             --output appimage
 
-          # Verify both X11 (xcb) and Wayland Qt platform plugins were bundled
+          # Verify X11 (xcb), Wayland platform, and Wayland EGL plugins were bundled
           test -f AppDir/usr/plugins/platforms/libqxcb.so
           test -f AppDir/usr/plugins/platforms/libqwayland-generic.so
+          test -f AppDir/usr/plugins/wayland-graphics-integration-client/libqt-plugin-wayland-egl.so
 
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4

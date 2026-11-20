@@ -184,4 +184,5 @@ private:
     mpv_handle* mpv_ = nullptr;
     PlaybackState state_;
     bool videoSizePending_ = false;
+    const char* subtitleOutlineProperty_ = "sub-outline-size";
 };

@@ -182,7 +182,14 @@ MpvPlayer::MpvPlayer(double volume, SubtitleEncoding subtitleEncoding,
         Check(mpv_set_property_string(mpv_, "sub-codepage", EncodingOption(state_.subtitleEncoding)), "set sub-codepage");
         Check(mpv_set_property_string(mpv_, "sub-font", FontOption(subtitleStyle).c_str()), "set sub-font");
         Check(mpv_set_property_string(mpv_, "sub-font-size", std::to_string(subtitleStyle.fontSize).c_str()), "set sub-font-size");
-        Check(mpv_set_property_string(mpv_, "sub-outline-size", std::to_string(subtitleStyle.outlineSize).c_str()), "set sub-outline-size");
+        const std::string outlineSize = std::to_string(subtitleStyle.outlineSize);
+        int outlineStatus = mpv_set_property_string(mpv_, "sub-outline-size", outlineSize.c_str());
+        if (outlineStatus == MPV_ERROR_PROPERTY_NOT_FOUND) {
+            // mpv < 0.39 (e.g. Ubuntu 24.04 libmpv 0.37) uses "sub-border-size".
+            subtitleOutlineProperty_ = "sub-border-size";
+            outlineStatus = mpv_set_property_string(mpv_, subtitleOutlineProperty_, outlineSize.c_str());
+        }
+        Check(outlineStatus, "set sub-outline-size");
         Check(mpv_set_property_string(mpv_, "sub-pos", PositionOption(subtitleStyle).c_str()), "set sub-pos");
         Check(mpv_set_property(mpv_, "volume", MPV_FORMAT_DOUBLE, &state_.volume), "set volume");
         for (size_t i = 0; i < kAdjustmentProperties.size(); ++i) {
@@ -266,7 +273,7 @@ void MpvPlayer::SetSubtitleStyle(const SubtitleStyle& style) {
     Command({"set", "sub-font", font.c_str()});
     Command({"set", "sub-font-size", size.c_str()});
     const std::string outline = std::to_string(style.outlineSize);
-    Command({"set", "sub-outline-size", outline.c_str()});
+    Command({"set", subtitleOutlineProperty_, outline.c_str()});
     const std::string position = PositionOption(style);
     Command({"set", "sub-pos", position.c_str()});
 }
