@@ -352,6 +352,8 @@ jobs:
           export APPIMAGE_EXTRACT_AND_RUN=1
           export NO_STRIP=true
           export QMAKE="$(command -v qmake6 || echo /usr/lib/qt6/bin/qmake)"
+          export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
+          export EXTRA_QT_PLUGINS="wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration"
           export LDAI_OUTPUT="dist/MoviePlayer-${VERSION}-linux-${ARCH}.AppImage"
 
           "./linuxdeploy-${ARCH}.AppImage" \
@@ -361,6 +363,10 @@ jobs:
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/movieplayer.png \
             --plugin qt \
             --output appimage
+
+          # Verify both X11 (xcb) and Wayland Qt platform plugins were bundled
+          test -f AppDir/usr/plugins/platforms/libqxcb.so
+          test -f AppDir/usr/plugins/platforms/libqwayland-generic.so
 
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4
