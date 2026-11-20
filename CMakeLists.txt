@@ -88,6 +88,24 @@ if(WIN32)
         IMPORTED_IMPLIB "${LIBMPV_DIR}/libmpv.dll.a"
         INTERFACE_INCLUDE_DIRECTORIES "${LIBMPV_DIR}/include")
 else()
+    if(APPLE)
+        find_program(HOMEBREW_EXECUTABLE brew)
+        if(HOMEBREW_EXECUTABLE)
+            execute_process(
+                COMMAND "${HOMEBREW_EXECUTABLE}" --prefix libarchive
+                OUTPUT_VARIABLE LIBARCHIVE_PREFIX
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            if(EXISTS "${LIBARCHIVE_PREFIX}/lib/pkgconfig")
+                if(DEFINED ENV{PKG_CONFIG_PATH} AND NOT "$ENV{PKG_CONFIG_PATH}" STREQUAL "")
+                    set(ENV{PKG_CONFIG_PATH} "${LIBARCHIVE_PREFIX}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+                else()
+                    set(ENV{PKG_CONFIG_PATH} "${LIBARCHIVE_PREFIX}/lib/pkgconfig")
+                endif()
+            endif()
+        endif()
+    endif()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
     add_library(libmpv ALIAS PkgConfig::MPV)

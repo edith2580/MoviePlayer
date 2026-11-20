@@ -2,15 +2,8 @@ name: Build and Release
 
 on:
   push:
-    branches:
-      - main
-      - master
     tags:
       - "v*"
-  pull_request:
-    branches:
-      - main
-      - master
   workflow_dispatch:
 
 permissions:
@@ -141,6 +134,7 @@ jobs:
       - name: Configure and Build
         run: |
           QT_PREFIX="$(brew --prefix qt@6)"
+          export PKG_CONFIG_PATH="$(brew --prefix libarchive)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$QT_PREFIX"
