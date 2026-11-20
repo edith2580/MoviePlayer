@@ -41,6 +41,10 @@
 #if defined(Q_OS_WIN)
 #include <windows.h>
 #include <shlwapi.h>
+#elif defined(Q_OS_MACOS)
+#include <IOKit/pwr_mgt/IOPMLib.h>
+#elif defined(Q_OS_LINUX)
+#include <QProcess>
 #endif
 
 namespace {
@@ -175,6 +179,7 @@ MainWindow::MainWindow(const Settings& settings, QWidget* parent)
 }
 
 MainWindow::~MainWindow() {
+    SetDisplaySleepInhibited(false);
     if (videoWidget_) {
         videoWidget_->Shutdown();
     }
@@ -260,8 +265,13 @@ void MainWindow::OpenFiles(const QStringList& paths) {
     if (videos.size() == 1) {
         Open(videos.front());
     } else if (videos.isEmpty()) {
-        for (const QString& path : paths) {
-            Open(path);
+        if (!paths.isEmpty()) {
+            OpenFromExplorer(paths.front());
+            for (qsizetype i = 1; i < paths.size(); ++i) {
+                if (!currentVideoPath_.isEmpty()) {
+                    AddSubtitle(paths[i]);
+                }
+            }
         }
     } else {
         ClearOpenRetry();
@@ -504,9 +514,18 @@ void MainWindow::AddFilesToPlaylist(const QStringList& paths) {
     }
 
     if (videos.isEmpty()) {
-        for (const QString& subtitle : subtitles) {
-            if (!currentVideoPath_.isEmpty()) {
-                AddSubtitle(subtitle);
+        if (!subtitles.isEmpty()) {
+            if (currentVideoPath_.isEmpty()) {
+                OpenFromExplorer(subtitles.front());
+                for (qsizetype i = 1; i < subtitles.size(); ++i) {
+                    if (!currentVideoPath_.isEmpty()) {
+                        AddSubtitle(subtitles[i]);
+                    }
+                }
+            } else {
+                for (const QString& subtitle : subtitles) {
+                    AddSubtitle(subtitle);
+                }
             }
         }
         return;
@@ -1576,6 +1595,7 @@ void MainWindow::HandleStateChanged(const PlaybackState& state) {
         }
     }
     controlBar_->SetPlayback(state);
+    UpdateSleepInhibition();
 
     if (reachedEnd && preferences_.autoAdvance && preferences_.repeat != RepeatMode::One) {
         PlayNext(true);
@@ -1611,8 +1631,63 @@ void MainWindow::SetFullscreen(bool fullscreen) {
         }
     }
     controlBar_->SetFullscreenState(fullscreen_);
+    UpdateSleepInhibition();
     LayoutChildren();
     ShowControls();
+}
+
+void MainWindow::UpdateSleepInhibition() {
+    const bool shouldInhibit = fullscreen_ && !playback_.fileName.isEmpty() && !playback_.paused && !playback_.atEnd;
+    SetDisplaySleepInhibited(shouldInhibit);
+}
+
+void MainWindow::SetDisplaySleepInhibited(bool inhibit) {
+    if (inhibit == sleepInhibited_) {
+        return;
+    }
+    sleepInhibited_ = inhibit;
+#if defined(Q_OS_WIN)
+    SetThreadExecutionState(inhibit ? (ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED) : ES_CONTINUOUS);
+#elif defined(Q_OS_MACOS)
+    if (inhibit) {
+        IOPMAssertionID assertionId = 0;
+        if (IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep,
+                                        kIOPMAssertionLevelOn,
+                                        CFSTR("Movie Player fullscreen playback"),
+                                        &assertionId) == kIOReturnSuccess) {
+            macSleepAssertionId_ = static_cast<uint32_t>(assertionId);
+        } else {
+            sleepInhibited_ = false;
+        }
+    } else if (macSleepAssertionId_ != 0) {
+        IOPMAssertionRelease(static_cast<IOPMAssertionID>(macSleepAssertionId_));
+        macSleepAssertionId_ = 0;
+    }
+#elif defined(Q_OS_LINUX)
+    if (inhibit) {
+        if (!linuxSleepInhibitProcess_) {
+            linuxSleepInhibitProcess_ = new QProcess(this);
+        }
+        if (linuxSleepInhibitProcess_->state() == QProcess::NotRunning) {
+            linuxSleepInhibitProcess_->start(
+                QStringLiteral("systemd-inhibit"),
+                {QStringLiteral("--what=idle"),
+                 QStringLiteral("--who=MoviePlayer"),
+                 QStringLiteral("--why=Fullscreen video playback"),
+                 QStringLiteral("--mode=block"),
+                 QStringLiteral("sleep"),
+                 QStringLiteral("infinity")});
+        }
+    } else if (linuxSleepInhibitProcess_) {
+        if (linuxSleepInhibitProcess_->state() != QProcess::NotRunning) {
+            linuxSleepInhibitProcess_->terminate();
+            if (!linuxSleepInhibitProcess_->waitForFinished(500)) {
+                linuxSleepInhibitProcess_->kill();
+                linuxSleepInhibitProcess_->waitForFinished(500);
+            }
+        }
+    }
+#endif
 }
 
 void MainWindow::SetCursorHidden(bool hidden) {
@@ -1648,6 +1723,7 @@ void MainWindow::UpdateTitle(const PlaybackState& state) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    SetDisplaySleepInhibited(false);
     SaveCurrentSettings();
     ClearOpenRetry();
     if (controlBar_) {

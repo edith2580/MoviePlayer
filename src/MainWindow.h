@@ -17,6 +17,7 @@
 #include "Settings.h"
 
 class MpvVideoWidget;
+class QProcess;
 class QTimer;
 
 // The top-level window. It takes all keyboard and mouse input and turns it into
@@ -129,6 +130,8 @@ private:
     void SeekToPointer(int clientX, bool isFinal);
     void ToggleFullscreen();
     void SetFullscreen(bool fullscreen);
+    void UpdateSleepInhibition();
+    void SetDisplaySleepInhibited(bool inhibit);
     void SetCursorHidden(bool hidden);
     void UpdateTitle(const PlaybackState& state);
 
@@ -166,6 +169,12 @@ private:
     bool fullscreen_ = false;
     bool wasMaximizedBeforeFullscreen_ = false;
     QRect normalGeometry_;
+    bool sleepInhibited_ = false;
+#if defined(Q_OS_MACOS)
+    uint32_t macSleepAssertionId_ = 0;
+#elif defined(Q_OS_LINUX)
+    QProcess* linuxSleepInhibitProcess_ = nullptr;
+#endif
 
     bool cursorHidden_ = false;
     QPoint lastGlobalCursorPosition_{};
