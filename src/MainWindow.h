@@ -169,6 +169,10 @@ private:
     bool fullscreen_ = false;
     bool wasMaximizedBeforeFullscreen_ = false;
     QRect normalGeometry_;
+#if defined(Q_OS_WIN)
+    qintptr restoreWinStyle_ = 0;
+    QRect restoreWinRect_;
+#endif
     bool sleepInhibited_ = false;
 #if defined(Q_OS_MACOS)
     uint32_t macSleepAssertionId_ = 0;

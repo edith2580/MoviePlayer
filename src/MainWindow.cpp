@@ -1611,6 +1611,49 @@ void MainWindow::SetFullscreen(bool fullscreen) {
         return;
     }
 
+#if defined(Q_OS_WIN)
+    const HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (fullscreen) {
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) {
+            return;
+        }
+        wasMaximizedBeforeFullscreen_ = isMaximized();
+        if (!wasMaximizedBeforeFullscreen_) {
+            normalGeometry_ = geometry();
+        }
+        RECT currentRect{};
+        GetWindowRect(hwnd, &currentRect);
+        restoreWinRect_ = QRect(currentRect.left, currentRect.top,
+                                currentRect.right - currentRect.left, currentRect.bottom - currentRect.top);
+        restoreWinStyle_ = static_cast<qintptr>(GetWindowLongPtrW(hwnd, GWL_STYLE));
+
+        fullscreen_ = true;
+        // Borderless fullscreen window (꽉찬 창모드): keeping WS_BORDER prevents Windows OpenGL
+        // drivers from promoting QOpenGLWidget into Exclusive Fullscreen mode (독점모드).
+        const LONG_PTR borderlessStyle =
+            (static_cast<LONG_PTR>(restoreWinStyle_) & ~static_cast<LONG_PTR>(WS_OVERLAPPEDWINDOW)) | WS_POPUP | WS_BORDER;
+        SetWindowLongPtrW(hwnd, GWL_STYLE, borderlessStyle);
+        const RECT& area = monitor.rcMonitor;
+        SetWindowPos(hwnd, HWND_TOP, area.left, area.top, area.right - area.left, area.bottom - area.top,
+                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    } else {
+        SetCursorHidden(false);
+        fullscreen_ = false;
+        if (restoreWinStyle_ != 0) {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, static_cast<LONG_PTR>(restoreWinStyle_));
+        }
+        if (wasMaximizedBeforeFullscreen_) {
+            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+            showMaximized();
+        } else {
+            SetWindowPos(hwnd, nullptr, restoreWinRect_.left(), restoreWinRect_.top(),
+                         restoreWinRect_.width(), restoreWinRect_.height(),
+                         SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        }
+    }
+#else
     if (fullscreen) {
         wasMaximizedBeforeFullscreen_ = isMaximized();
         if (!wasMaximizedBeforeFullscreen_) {
@@ -1630,6 +1673,7 @@ void MainWindow::SetFullscreen(bool fullscreen) {
             }
         }
     }
+#endif
     controlBar_->SetFullscreenState(fullscreen_);
     UpdateSleepInhibition();
     LayoutChildren();
