@@ -101,8 +101,20 @@ jobs:
   # 2. macOS Build (.app Bundle + Code Signing + Notarization + .dmg)
   # ============================================================================
   build-macos:
-    name: macOS (.dmg & Code Sign)
-    runs-on: macos-latest
+    name: macOS (${{ matrix.name }} .dmg & Code Sign)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: arm64
+            runner: macos-latest
+            arch: arm64
+            artifact: MoviePlayer-macos-arm64
+          - name: x86_64
+            runner: macos-15-intel
+            arch: x86_64
+            artifact: MoviePlayer-macos-x86_64
     env:
       MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
       MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -156,14 +168,18 @@ jobs:
           done
           iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/app.icns" || true
 
-          # Bundle Qt6 frameworks and plugins
+          # Bundle Qt6 frameworks, plugins, and non-system dylibs (including libmpv)
           "$(brew --prefix qt@6)/bin/macdeployqt" "$APP_BUNDLE" -always-overwrite
 
-          # Bundle libmpv and non-system dylibs into Contents/Frameworks
-          dylibbundler -od -b \
+          # Catch any remaining non-system dylibs without wiping Contents/Frameworks (never use -od)
+          dylibbundler -cd -of -b \
             -x "$APP_BUNDLE/Contents/MacOS/MoviePlayer" \
             -d "$APP_BUNDLE/Contents/Frameworks/" \
             -p "@executable_path/../Frameworks/"
+
+          # Verify essential frameworks and libmpv are present in the bundle
+          test -f "$APP_BUNDLE/Contents/Frameworks/QtOpenGLWidgets.framework/Versions/A/QtOpenGLWidgets"
+          test -f "$APP_BUNDLE/Contents/Frameworks/libmpv.2.dylib"
 
       - name: Import Code Signing Certificate & Sign App Bundle
         run: |
@@ -211,7 +227,7 @@ jobs:
           ln -s /Applications dist/dmg_root/Applications
           cp LICENSE res/THIRD_PARTY_NOTICES.txt dist/dmg_root/
 
-          DMG_PATH="dist/MoviePlayer-${VERSION}-macos.dmg"
+          DMG_PATH="dist/MoviePlayer-${VERSION}-macos-${{ matrix.arch }}.dmg"
           hdiutil create -volname "Movie Player" -srcfolder dist/dmg_root -ov -format UDZO "$DMG_PATH"
 
           if [[ -n "$MACOS_CERTIFICATE_P12" && -n "$MACOS_SIGNING_IDENTITY" ]]; then
@@ -240,8 +256,8 @@ jobs:
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MoviePlayer-macos
-          path: dist/MoviePlayer-*-macos.dmg
+          name: ${{ matrix.artifact }}
+          path: dist/MoviePlayer-*-macos-${{ matrix.arch }}.dmg
           if-no-files-found: error
 
   # ============================================================================
