@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 ARCH="${ARCH:-$(uname -m)}"
 VERSION="${VERSION:-$(sed -n 's/.*project(MoviePlayer VERSION \([0-9.]*\).*/\1/p' "${REPO_ROOT}/CMakeLists.txt" | head -n1)}"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.1.1}"
 
 WORK_ROOT="${WORK_ROOT:-${XDG_CACHE_HOME:-${HOME}/.cache}/movieplayer-appimage}"
 BUILD_DIR="${WORK_ROOT}/build-${ARCH}"
