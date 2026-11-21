@@ -49,18 +49,25 @@ void MpvVideoWidget::AttachPlayer(MpvPlayer* player) {
 }
 
 void MpvVideoWidget::Shutdown() {
-    if (!renderContext_) {
+    shuttingDown_.store(true, std::memory_order_release);
+    disconnect(this, &QOpenGLWidget::frameSwapped, this, &MpvVideoWidget::OnFrameSwapped);
+    mpv_render_context* ctx = renderContext_;
+    renderContext_ = nullptr;
+    if (!ctx) {
         return;
     }
-    makeCurrent();
-    mpv_render_context_set_update_callback(renderContext_, nullptr, nullptr);
-    mpv_render_context_free(renderContext_);
-    renderContext_ = nullptr;
-    doneCurrent();
+    mpv_render_context_set_update_callback(ctx, nullptr, nullptr);
+    if (isValid()) {
+        makeCurrent();
+        mpv_render_context_free(ctx);
+        doneCurrent();
+    } else {
+        mpv_render_context_free(ctx);
+    }
 }
 
 void MpvVideoWidget::initializeGL() {
-    if (renderContext_ || !player_ || !player_->Handle()) {
+    if (shuttingDown_.load(std::memory_order_acquire) || renderContext_ || !player_ || !player_->Handle()) {
         return;
     }
 
@@ -80,13 +87,15 @@ void MpvVideoWidget::initializeGL() {
         renderContext_,
         [](void* ctx) {
             auto* self = static_cast<MpvVideoWidget*>(ctx);
-            QMetaObject::invokeMethod(self, &MpvVideoWidget::OnMpvRenderUpdate, Qt::QueuedConnection);
+            if (!self->shuttingDown_.load(std::memory_order_acquire)) {
+                QMetaObject::invokeMethod(self, &MpvVideoWidget::OnMpvRenderUpdate, Qt::QueuedConnection);
+            }
         },
         this);
 }
 
 void MpvVideoWidget::paintGL() {
-    if (!renderContext_) {
+    if (shuttingDown_.load(std::memory_order_acquire) || !renderContext_) {
         return;
     }
     const qreal dpr = devicePixelRatioF();
@@ -115,7 +124,7 @@ void MpvVideoWidget::paintGL() {
 }
 
 void MpvVideoWidget::OnMpvRenderUpdate() {
-    if (!renderContext_) {
+    if (shuttingDown_.load(std::memory_order_acquire) || !renderContext_) {
         return;
     }
     const uint64_t flags = mpv_render_context_update(renderContext_);
@@ -125,7 +134,7 @@ void MpvVideoWidget::OnMpvRenderUpdate() {
 }
 
 void MpvVideoWidget::OnFrameSwapped() {
-    if (renderContext_) {
+    if (!shuttingDown_.load(std::memory_order_acquire) && renderContext_) {
         mpv_render_context_report_swap(renderContext_);
     }
 }

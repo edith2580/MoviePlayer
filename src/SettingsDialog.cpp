@@ -3,6 +3,8 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QFont>
 #include <QFontDatabase>
@@ -11,18 +13,26 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMessageBox>
+#include <QMetaObject>
+#include <QProgressBar>
+#include <QProxyStyle>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QTreeWidget>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <optional>
 #include <set>
 
+#include "AppInfo.h"
+#include "AppUpdater.h"
 #include "FileAssociation.h"
 
 namespace {
@@ -32,22 +42,42 @@ constexpr const char* kPreviewText = "가나다라 ABC 123";
 constexpr const char* kDefaultFontLabel = "기본 글꼴";
 constexpr const char* kShortcutHint = "항목을 더블클릭하거나 변경을 누른 뒤 새 키를 누르세요.";
 
+// Preserves the native OS button look while adding comfortable padding around text.
+class PaddedButtonStyle : public QProxyStyle {
+public:
+    using QProxyStyle::QProxyStyle;
+
+    QSize sizeFromContents(ContentsType type, const QStyleOption* option, const QSize& size,
+                           const QWidget* widget) const override {
+        QSize result = QProxyStyle::sizeFromContents(type, option, size, widget);
+        if (type == CT_PushButton) {
+            result.setWidth(std::max(result.width() + 24, 80));
+            result.setHeight(std::max(result.height() + 8, 30));
+        }
+        return result;
+    }
+};
+
 class SettingsDialog : public QDialog {
 public:
     SettingsDialog(QWidget* owner, const Preferences& current, const std::function<void(const Preferences&)>& apply)
-        : QDialog(owner), working_(current), applied_(current), apply_(apply) {
+        : QDialog(owner), owner_(owner), working_(current), applied_(current), apply_(apply) {
         setWindowTitle(QStringLiteral("설정"));
         setModal(true);
-        setMinimumSize(480, 420);
+        setMinimumSize(540, 480);
 
         auto* mainLayout = new QVBoxLayout(this);
+        mainLayout->setContentsMargins(12, 12, 12, 12);
+        mainLayout->setSpacing(10);
         tabs_ = new QTabWidget(this);
         tabs_->addTab(BuildGeneralPage(), QStringLiteral("일반"));
         tabs_->addTab(BuildSubtitlePage(), QStringLiteral("자막"));
         tabs_->addTab(BuildShortcutPage(), QStringLiteral("단축키"));
+        tabs_->addTab(BuildAboutPage(), QStringLiteral("정보"));
         mainLayout->addWidget(tabs_, 1);
 
         auto* buttonRow = new QHBoxLayout();
+        buttonRow->setSpacing(8);
         buttonRow->addStretch(1);
         okButton_ = new QPushButton(QStringLiteral("확인"), this);
         cancelButton_ = new QPushButton(QStringLiteral("취소"), this);
@@ -57,6 +87,12 @@ public:
         buttonRow->addWidget(cancelButton_);
         buttonRow->addWidget(applyButton_);
         mainLayout->addLayout(buttonRow);
+
+        buttonStyle_ = new PaddedButtonStyle();
+        buttonStyle_->setParent(this);
+        for (QPushButton* btn : findChildren<QPushButton*>()) {
+            btn->setStyle(buttonStyle_);
+        }
 
         connect(okButton_, &QPushButton::clicked, this, [this] {
             Apply();
@@ -151,6 +187,7 @@ private:
         assocLayout->addWidget(assocHint);
 
         auto* assocButtons = new QHBoxLayout();
+        assocButtons->setSpacing(8);
         assocRegisterBtn_ = new QPushButton(QStringLiteral("등록"), assocGroup);
         assocUnregisterBtn_ = new QPushButton(QStringLiteral("등록 해제"), assocGroup);
         assocDefaultsBtn_ = new QPushButton(QStringLiteral("기본 앱 설정 열기"), assocGroup);
@@ -293,6 +330,7 @@ private:
         layout->addWidget(shortcutStatus_);
 
         auto* btnRow = new QHBoxLayout();
+        btnRow->setSpacing(8);
         shortcutChangeBtn_ = new QPushButton(QStringLiteral("변경"), page);
         shortcutClearBtn_ = new QPushButton(QStringLiteral("지우기"), page);
         shortcutDefaultsBtn_ = new QPushButton(QStringLiteral("모두 기본값으로"), page);
@@ -333,6 +371,226 @@ private:
             shortcutStatus_->setText(QStringLiteral("모든 단축키를 기본값으로 되돌렸습니다. 적용하거나 확인을 눌러야 반영됩니다."));
             UpdateShortcutButtons();
             UpdateApplyButton();
+        });
+
+        return page;
+    }
+
+    QWidget* BuildAboutPage() {
+        auto* page = new QWidget(this);
+        auto* layout = new QVBoxLayout(page);
+        layout->setContentsMargins(12, 12, 12, 12);
+        layout->setSpacing(12);
+
+        // 1) Program info header (icon, name, version, install type, GitHub buttons)
+        auto* headerRow = new QHBoxLayout();
+        headerRow->setSpacing(14);
+
+        auto* iconLabel = new QLabel(page);
+        iconLabel->setPixmap(QIcon(QStringLiteral(":/res/app.ico")).pixmap(48, 48));
+        iconLabel->setFixedSize(52, 52);
+        iconLabel->setAlignment(Qt::AlignCenter);
+        headerRow->addWidget(iconLabel, 0, Qt::AlignTop);
+
+        auto* titleCol = new QVBoxLayout();
+        titleCol->setSpacing(4);
+        auto* nameLabel = new QLabel(QString::fromUtf8(AppInfo::kAppName), page);
+        QFont nameFont = nameLabel->font();
+        nameFont.setPointSize(nameFont.pointSize() + 3);
+        nameFont.setBold(true);
+        nameLabel->setFont(nameFont);
+        titleCol->addWidget(nameLabel);
+
+        const InstallKind installKind = AppUpdater::DetectInstallKind();
+        auto* versionLabel = new QLabel(
+            QStringLiteral("버전 v%1  (%2)")
+                .arg(QCoreApplication::applicationVersion(), AppUpdater::InstallKindLabel(installKind)),
+            page);
+        titleCol->addWidget(versionLabel);
+
+        auto* linkRow = new QHBoxLayout();
+        linkRow->setContentsMargins(0, 6, 0, 0);
+        linkRow->setSpacing(8);
+        auto* githubBtn = new QPushButton(QStringLiteral("GitHub 열기"), page);
+        auto* releasesBtn = new QPushButton(QStringLiteral("릴리스 페이지"), page);
+        linkRow->addWidget(githubBtn);
+        linkRow->addWidget(releasesBtn);
+        linkRow->addStretch(1);
+        titleCol->addLayout(linkRow);
+        headerRow->addLayout(titleCol, 1);
+        layout->addLayout(headerRow);
+
+        connect(githubBtn, &QPushButton::clicked, this, [] {
+            QDesktopServices::openUrl(QUrl(QString::fromLatin1(AppInfo::kGithubUrl)));
+        });
+        connect(releasesBtn, &QPushButton::clicked, this, [] {
+            QDesktopServices::openUrl(QUrl(QString::fromLatin1(AppInfo::kGithubReleasesUrl)));
+        });
+
+        // 2) GitHub Releases auto-update section
+        auto* updateGroup = new QGroupBox(QStringLiteral("업데이트"), page);
+        auto* updateLayout = new QVBoxLayout(updateGroup);
+        updateLayout->setContentsMargins(12, 10, 12, 12);
+        updateLayout->setSpacing(8);
+
+        updateStatus_ = new QLabel(QStringLiteral("GitHub 릴리스에서 최신 버전을 확인할 수 있습니다."), updateGroup);
+        updateStatus_->setWordWrap(true);
+        updateLayout->addWidget(updateStatus_);
+
+        updateProgress_ = new QProgressBar(updateGroup);
+        updateProgress_->setRange(0, 100);
+        updateProgress_->setValue(0);
+        updateProgress_->hide();
+        updateLayout->addWidget(updateProgress_);
+
+        auto* updateBtnRow = new QHBoxLayout();
+        updateBtnRow->setSpacing(8);
+        checkUpdateBtn_ = new QPushButton(QStringLiteral("업데이트 확인"), updateGroup);
+        applyUpdateBtn_ = new QPushButton(QStringLiteral("지금 업데이트"), updateGroup);
+        applyUpdateBtn_->setEnabled(false);
+        updateBtnRow->addWidget(checkUpdateBtn_);
+        updateBtnRow->addWidget(applyUpdateBtn_);
+        updateBtnRow->addStretch(1);
+        updateLayout->addLayout(updateBtnRow);
+        layout->addWidget(updateGroup);
+
+        updater_ = new AppUpdater(this);
+        connect(checkUpdateBtn_, &QPushButton::clicked, this, [this] {
+            updater_->CheckForUpdates();
+        });
+        connect(applyUpdateBtn_, &QPushButton::clicked, this, [this] {
+            if (latestRelease_.updateAvailable) {
+                updater_->DownloadAndApply(latestRelease_);
+            }
+        });
+        connect(updater_, &AppUpdater::checkStarted, this, [this] {
+            checkUpdateBtn_->setEnabled(false);
+            applyUpdateBtn_->setEnabled(false);
+            updateProgress_->hide();
+            updateStatus_->setText(QStringLiteral("업데이트 확인 중..."));
+        });
+        connect(updater_, &AppUpdater::checkFinished, this, [this](const ReleaseInfo& info) {
+            latestRelease_ = info;
+            checkUpdateBtn_->setEnabled(true);
+            if (!info.updateAvailable) {
+                applyUpdateBtn_->setEnabled(false);
+                applyUpdateBtn_->setText(QStringLiteral("지금 업데이트"));
+                updateStatus_->setText(
+                    QStringLiteral("최신 버전입니다 (현재 v%1 / 최신 v%2).")
+                        .arg(QCoreApplication::applicationVersion(), info.version));
+                return;
+            }
+            applyUpdateBtn_->setEnabled(true);
+            if (info.canAutoUpdate) {
+                applyUpdateBtn_->setText(QStringLiteral("지금 업데이트"));
+                updateStatus_->setText(
+                    QStringLiteral("새 버전 v%1을(를) 사용할 수 있습니다. (%2)")
+                        .arg(info.version, info.assetName));
+            } else if (!info.assetDownloadUrl.isEmpty()) {
+                applyUpdateBtn_->setText(QStringLiteral("패키지 다운로드"));
+                updateStatus_->setText(
+                    QStringLiteral("새 버전 v%1을(를) 사용할 수 있습니다. (%2)")
+                        .arg(info.version, info.assetName));
+            } else {
+                applyUpdateBtn_->setText(QStringLiteral("릴리스 페이지 열기"));
+                updateStatus_->setText(
+                    QStringLiteral("새 버전 v%1을(를) 사용할 수 있습니다. GitHub 릴리스에서 다운로드하세요.")
+                        .arg(info.version));
+            }
+        });
+        connect(updater_, &AppUpdater::checkFailed, this, [this](const QString& error) {
+            checkUpdateBtn_->setEnabled(true);
+            applyUpdateBtn_->setEnabled(false);
+            updateStatus_->setText(error);
+        });
+        connect(updater_, &AppUpdater::downloadStarted, this, [this](const QString& assetName) {
+            checkUpdateBtn_->setEnabled(false);
+            applyUpdateBtn_->setEnabled(false);
+            updateProgress_->setRange(0, 100);
+            updateProgress_->setValue(0);
+            updateProgress_->show();
+            updateStatus_->setText(QStringLiteral("다운로드 중: %1").arg(assetName));
+        });
+        connect(updater_, &AppUpdater::downloadProgress, this, [this](qint64 received, qint64 total) {
+            if (total > 0) {
+                updateProgress_->setRange(0, 100);
+                updateProgress_->setValue(static_cast<int>((received * 100) / total));
+                const double recvMb = static_cast<double>(received) / (1024.0 * 1024.0);
+                const double totalMb = static_cast<double>(total) / (1024.0 * 1024.0);
+                updateStatus_->setText(QStringLiteral("다운로드 중... %1 / %2 MB")
+                                           .arg(recvMb, 0, 'f', 1)
+                                           .arg(totalMb, 0, 'f', 1));
+            } else {
+                updateProgress_->setRange(0, 0);
+            }
+        });
+        connect(updater_, &AppUpdater::downloadFailed, this, [this](const QString& error) {
+            updateProgress_->hide();
+            checkUpdateBtn_->setEnabled(true);
+            applyUpdateBtn_->setEnabled(latestRelease_.updateAvailable);
+            updateStatus_->setText(error);
+        });
+        connect(updater_, &AppUpdater::updateReadyToApply, this, [this](bool restartRequired, const QString& message) {
+            updateProgress_->hide();
+            updateStatus_->setText(message);
+            if (restartRequired) {
+                accept();
+                if (owner_) {
+                    QMetaObject::invokeMethod(owner_, &QWidget::close, Qt::QueuedConnection);
+                } else {
+                    QMetaObject::invokeMethod(qApp, &QApplication::quit, Qt::QueuedConnection);
+                }
+            } else {
+                checkUpdateBtn_->setEnabled(true);
+                applyUpdateBtn_->setEnabled(true);
+                QMessageBox::information(this, QStringLiteral("업데이트"), message);
+            }
+        });
+
+        // 3) Used libraries list (managed via AppInfo::kUsedLibraries)
+        auto* libGroup = new QGroupBox(QStringLiteral("사용 라이브러리"), page);
+        auto* libLayout = new QVBoxLayout(libGroup);
+
+        libraryList_ = new QTreeWidget(libGroup);
+        libraryList_->setColumnCount(3);
+        libraryList_->setHeaderLabels({QStringLiteral("라이브러리"), QStringLiteral("라이선스"), QStringLiteral("설명")});
+        libraryList_->setRootIsDecorated(false);
+        libraryList_->setSelectionMode(QAbstractItemView::SingleSelection);
+        libraryList_->setUniformRowHeights(true);
+        libraryList_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        libraryList_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        libraryList_->header()->setSectionResizeMode(2, QHeaderView::Stretch);
+
+        for (const AppInfo::LibraryInfo& lib : AppInfo::kUsedLibraries) {
+            auto* item = new QTreeWidgetItem(libraryList_);
+            QString displayName = QString::fromUtf8(lib.name);
+            if (lib.version && lib.version[0] != '\0') {
+                displayName += QStringLiteral(" (%1)").arg(QString::fromUtf8(lib.version));
+            }
+            item->setText(0, displayName);
+            item->setText(1, QString::fromUtf8(lib.license));
+            item->setText(2, QString::fromUtf8(lib.description));
+            if (lib.url && lib.url[0] != '\0') {
+                const QString url = QString::fromUtf8(lib.url);
+                item->setData(0, Qt::UserRole, url);
+                item->setToolTip(0, url);
+                item->setToolTip(2, url);
+            }
+        }
+        libLayout->addWidget(libraryList_, 1);
+
+        auto* libHint = new QLabel(QStringLiteral("항목을 더블클릭하면 프로젝트 웹 페이지를 엽니다."), libGroup);
+        libLayout->addWidget(libHint);
+        layout->addWidget(libGroup, 1);
+
+        connect(libraryList_, &QTreeWidget::itemDoubleClicked, this, [](QTreeWidgetItem* item, int) {
+            if (!item) {
+                return;
+            }
+            const QString url = item->data(0, Qt::UserRole).toString();
+            if (!url.isEmpty()) {
+                QDesktopServices::openUrl(QUrl(url));
+            }
         });
 
         return page;
@@ -500,6 +758,7 @@ private:
         UpdateApplyButton();
     }
 
+    QWidget* owner_ = nullptr;
     Preferences working_;
     Preferences applied_;
     const std::function<void(const Preferences&)>& apply_;
@@ -524,9 +783,18 @@ private:
     QPushButton* shortcutClearBtn_ = nullptr;
     QPushButton* shortcutDefaultsBtn_ = nullptr;
 
+    AppUpdater* updater_ = nullptr;
+    ReleaseInfo latestRelease_;
+    QLabel* updateStatus_ = nullptr;
+    QProgressBar* updateProgress_ = nullptr;
+    QPushButton* checkUpdateBtn_ = nullptr;
+    QPushButton* applyUpdateBtn_ = nullptr;
+    QTreeWidget* libraryList_ = nullptr;
+
     QPushButton* okButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
     QPushButton* applyButton_ = nullptr;
+    QProxyStyle* buttonStyle_ = nullptr;
 
     bool loading_ = true;
     bool capturing_ = false;

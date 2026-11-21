@@ -2,6 +2,8 @@
 
 #include <QOpenGLWidget>
 
+#include <atomic>
+
 struct mpv_render_context;
 class MpvPlayer;
 
@@ -32,4 +34,5 @@ private slots:
 private:
     MpvPlayer* player_ = nullptr;
     mpv_render_context* renderContext_ = nullptr;
+    std::atomic<bool> shuttingDown_{false};
 };

@@ -6,11 +6,15 @@
 #include <mpv/client.h>
 
 #include <algorithm>
+#include <chrono>
 #include <clocale>
 #include <cmath>
 #include <cstring>
+#include <future>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -163,6 +167,14 @@ MpvPlayer::MpvPlayer(double volume, SubtitleEncoding subtitleEncoding,
 
     try {
         EnableLogFileIfRequested(mpv_);
+        // Disable built-in scripts and OS media-controls bridges (e.g. Windows SMTC)
+        // that create extra weak client handles and can deadlock with the UI thread
+        // during mpv_terminate_destroy().
+        mpv_set_option_string(mpv_, "load-scripts", "no");
+        mpv_set_option_string(mpv_, "ytdl", "no");
+        mpv_set_option_string(mpv_, "osc", "no");
+        mpv_set_option_string(mpv_, "osd-bar", "no");
+        mpv_set_option_string(mpv_, "media-controls", "no");
         Check(mpv_set_property_string(mpv_, "vo", "libmpv"), "set vo=libmpv");
 #if defined(Q_OS_MACOS)
         Check(mpv_set_property_string(mpv_, "hwdec", "auto-safe"), "set hwdec");
@@ -223,17 +235,46 @@ MpvPlayer::MpvPlayer(double volume, SubtitleEncoding subtitleEncoding,
         mpv_,
         [](void* ctx) {
             auto* self = static_cast<MpvPlayer*>(ctx);
-            QMetaObject::invokeMethod(self, &MpvPlayer::ProcessEvents, Qt::QueuedConnection);
+            if (!self->shuttingDown_.load(std::memory_order_acquire)) {
+                QMetaObject::invokeMethod(self, &MpvPlayer::ProcessEvents, Qt::QueuedConnection);
+            }
         },
         this);
 }
 
 MpvPlayer::~MpvPlayer() {
-    if (mpv_) {
-        mpv_set_wakeup_callback(mpv_, nullptr, nullptr);
-        mpv_terminate_destroy(mpv_);
-        mpv_ = nullptr;
+    DestroyWithTimeout(0);
+}
+
+void MpvPlayer::PrepareShutdown() {
+    shuttingDown_.store(true, std::memory_order_release);
+    if (!mpv_) {
+        return;
     }
+    mpv_set_wakeup_callback(mpv_, nullptr, nullptr);
+    const char* stopCmd[] = {"stop", nullptr};
+    mpv_command_async(mpv_, 0, stopCmd);
+}
+
+void MpvPlayer::DestroyWithTimeout(int timeoutMs) {
+    shuttingDown_.store(true, std::memory_order_release);
+    mpv_handle* handle = mpv_;
+    mpv_ = nullptr;
+    if (!handle) {
+        return;
+    }
+    mpv_set_wakeup_callback(handle, nullptr, nullptr);
+    if (timeoutMs <= 0) {
+        mpv_terminate_destroy(handle);
+        return;
+    }
+    auto done = std::make_shared<std::promise<void>>();
+    std::future<void> future = done->get_future();
+    std::thread([handle, done]() {
+        mpv_terminate_destroy(handle);
+        done->set_value();
+    }).detach();
+    future.wait_for(std::chrono::milliseconds(timeoutMs));
 }
 
 void MpvPlayer::Open(const QString& path, const QStringList& subtitleFiles) {
@@ -439,6 +480,9 @@ void MpvPlayer::ShowMessage(const QString& text) {
 }
 
 void MpvPlayer::Command(std::initializer_list<const char*> arguments, uint64_t replyId) {
+    if (shuttingDown_.load(std::memory_order_acquire) || !mpv_) {
+        return;
+    }
     std::vector<const char*> command(arguments);
     command.push_back(nullptr);
     mpv_command_async(mpv_, replyId, command.data());
@@ -572,7 +616,7 @@ void MpvPlayer::ReportVideoSizeIfPending() {
 }
 
 void MpvPlayer::ProcessEvents() {
-    if (!mpv_) {
+    if (shuttingDown_.load(std::memory_order_acquire) || !mpv_) {
         return;
     }
     bool changed = false;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(MoviePlayer VERSION 0.1.2 LANGUAGES CXX)
+project(MoviePlayer VERSION 0.1.3 LANGUAGES CXX)
 
 if(WIN32)
     enable_language(RC)
@@ -113,6 +113,9 @@ endif()
 
 set(PROJECT_SOURCES
     src/main.cpp
+    src/AppInfo.h
+    src/AppUpdater.cpp
+    src/AppUpdater.h
     src/ContextMenu.cpp
     src/ContextMenu.h
     src/ControlBar.cpp
@@ -152,6 +155,8 @@ if(WIN32)
 endif()
 
 add_executable(MoviePlayer WIN32 MACOSX_BUNDLE ${PROJECT_SOURCES})
+
+target_compile_definitions(MoviePlayer PRIVATE MOVIEPLAYER_VERSION="${PROJECT_VERSION}")
 
 target_link_libraries(MoviePlayer PRIVATE
     Qt6::Core

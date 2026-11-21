@@ -187,6 +187,7 @@ private:
 
     bool menuOpen_ = false;
     bool dialogOpen_ = false;
+    bool closing_ = false;
     bool announceSubtitleDelay_ = false;
     bool announceLoop_ = false;
     bool restartLoopPending_ = false;  // Playback is at the loop's new end, so it should go back to the start.

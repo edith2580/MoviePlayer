@@ -5,6 +5,7 @@
 #include <QStringList>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
@@ -112,6 +113,12 @@ public:
 
     mpv_handle* Handle() const { return mpv_; }
 
+    // Stops wakeup callbacks and requests playback stop before tearing down the render context.
+    void PrepareShutdown();
+    // Tears down the libmpv core, waiting up to timeoutMs (0 = wait indefinitely) so a stuck
+    // decoder/audio/network thread never freezes app exit.
+    void DestroyWithTimeout(int timeoutMs);
+
     // Subtitle files are offered in the given order, and mpv favors the first.
     void Open(const QString& path, const QStringList& subtitleFiles);
     void TogglePause();
@@ -182,6 +189,7 @@ private:
     void ReportVideoSizeIfPending();
 
     mpv_handle* mpv_ = nullptr;
+    std::atomic<bool> shuttingDown_{false};
     PlaybackState state_;
     bool videoSizePending_ = false;
     const char* subtitleOutlineProperty_ = "sub-outline-size";

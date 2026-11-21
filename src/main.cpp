@@ -102,7 +102,7 @@ private:
 int main(int argc, char* argv[]) {
     MoviePlayerApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("MoviePlayer"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.2"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(MOVIEPLAYER_VERSION));
     app.setWindowIcon(QIcon(QStringLiteral(":/res/app.ico")));
 
     const QString path = PathFromArguments(QCoreApplication::arguments());

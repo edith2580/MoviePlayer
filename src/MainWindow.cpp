@@ -18,6 +18,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
+#include <QPointer>
 #include <QScreen>
 #include <QStandardPaths>
 #include <QTimer>
@@ -302,13 +303,19 @@ void MainWindow::FindSeriesInBackground() {
     }
     const unsigned search = seriesSearch_;
     const QString video = playlist_[static_cast<qsizetype>(playlistIndex_)];
+    QPointer<MainWindow> self(this);
     // Reading a folder on a network drive can take seconds, so it's done off the UI thread.
-    std::thread([this, search, video] {
+    std::thread([self, search, video] {
         QStringList series = FindSeries(video);
+        if (!self) {
+            return;
+        }
         QMetaObject::invokeMethod(
-            this,
-            [this, search, video, series = std::move(series)]() {
-                HandleSeriesFound(search, video, series);
+            self,
+            [self, search, video, series = std::move(series)]() {
+                if (self) {
+                    self->HandleSeriesFound(search, video, series);
+                }
             },
             Qt::QueuedConnection);
     }).detach();
@@ -1767,18 +1774,41 @@ void MainWindow::UpdateTitle(const PlaybackState& state) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if (closing_) {
+        QWidget::closeEvent(event);
+        return;
+    }
+    closing_ = true;
+
     SetDisplaySleepInhibited(false);
     SaveCurrentSettings();
     ClearOpenRetry();
-    if (controlBar_) {
-        controlBar_->hide();
+    if (idleTimer_) {
+        idleTimer_->stop();
+    }
+    if (seriesTimer_) {
+        seriesTimer_->stop();
+    }
+    ++seriesSearch_;
+
+    if (player_) {
+        player_->disconnect(this);
+        player_->PrepareShutdown();
     }
     if (videoWidget_) {
         videoWidget_->Shutdown();
     }
-    // mpv renders into videoWidget_, so destroy player_ before the window goes away.
-    delete player_;
-    player_ = nullptr;
+
+    // Hide the window immediately so it never appears frozen while mpv finishes
+    // tearing down decoders, audio outputs, or network streams.
+    hide();
+
+    // mpv renders into videoWidget_, so destroy player_ after videoWidget_->Shutdown().
+    if (player_) {
+        player_->DestroyWithTimeout(2500);
+        delete player_;
+        player_ = nullptr;
+    }
     QDir(subtitleTempDirectory_).removeRecursively();
     QWidget::closeEvent(event);
 }
