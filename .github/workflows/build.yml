@@ -343,7 +343,6 @@ jobs:
           host: ${{ matrix.qt_host }}
           target: desktop
           arch: ${{ matrix.qt_arch }}
-          modules: qtwayland
           cache: true
 
       - name: Build and Package AppImage (.AppImage with Qt ${{ env.QT_VERSION }})
