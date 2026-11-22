@@ -1,5 +1,18 @@
 # 변경 내역 (Changelog)
 
+## v0.1.4
+
+### Linux AppImage 호환성 개선
+- **Linux AppImage (`x86_64` / `arm64`) Qt 6.8.2 업그레이드**
+  - 기존 Ubuntu 24.04 기본 Qt 6.4.2에서 발생하던 KDE Plasma 6(Qt 6.7+) `QFont::fromString` 경고 및 Wayland 화면 갱신 문제를 해결했습니다.
+  - Windows 빌드와 동일한 Qt 6.8.2(`qtwayland` 포함)로 통일했습니다. (`.deb` 패키지는 기존처럼 시스템 Qt6 의존성을 유지합니다.)
+- **AppImage 필수 Qt 플러그인 자동 감지 및 번들링 강화**
+  - Wayland 플랫폼 플러그인(`libqwayland-egl.so`, `libqwayland-generic.so`, `libqwayland.so`)을 Qt 버전에 맞춰 자동 탐지하도록 개선했습니다.
+  - `xcbglintegrations`(X11 OpenGL) 및 `tls`(GitHub 자동 업데이트 HTTPS) 플러그인 번들링 및 검증을 추가했습니다.
+- **문서 보강**: `README.md`에 Linux AppImage 실행 방법 및 Ubuntu / Debian / CachyOS / Arch Linux (최소 설치·WSL) 필수 패키지 안내를 추가했습니다.
+
+---
+
 ## v0.1.3
 
 ### 새 기능

@@ -49,9 +49,49 @@ macOS 코드 서명 인증서 Secret 및 GitHub 저장소 권한 설정 방법�
 
 ## 실행
 
+### Windows
 ```powershell
 build\Release\MoviePlayer.exe "동영상 경로"
 ```
+
+### Linux (AppImage)
+```bash
+chmod +x MoviePlayer-*-linux-*.AppImage
+./MoviePlayer-*-linux-*.AppImage "동영상 경로"
+```
+
+FUSE가 없는 환경에서는 추출 실행 옵션을 사용할 수 있습니다:
+```bash
+./MoviePlayer-*-linux-*.AppImage --appimage-extract-and-run
+```
+
+#### Ubuntu / Debian (최소 설치 또는 WSL 환경)
+한글 UI·자막 폰트나 AppImage FUSE 마운트가 없는 경우 아래 명령으로 설치합니다:
+
+```bash
+sudo apt-get update && sudo apt-get install -y fonts-noto-cjk fontconfig
+fc-cache -fv
+```
+(FUSE 마운트 실행에 `libfuse.so.2` 오류가 나면 `sudo apt-get install -y libfuse2t64`를 추가로 설치하세요.)
+
+#### CachyOS / Arch Linux (최소 설치 또는 WSL 환경)
+일반 데스크톱 환경에는 기본 포함되지만, 최소(minimal) 이미지나 WSL 환경에서 AppImage 실행 시 FUSE·OpenGL·한글 폰트·오디오 시스템 라이브러리가 누락될 수 있습니다. 아래 명령으로 한 번에 설치할 수 있습니다:
+
+```bash
+sudo pacman -S \
+  fuse3 libglvnd mesa fontconfig noto-fonts-cjk \
+  harfbuzz fribidi libice libsm alsa-lib libpipewire pipewire-jack
+fc-cache -fv
+```
+
+| 패키지 | 용도 |
+|---|---|
+| `fuse3` | AppImage 마운트 실행 (`fusermount3`) |
+| `libglvnd`, `mesa` | OpenGL / EGL 드라이버 (`libEGL.so.1` 등) |
+| `fontconfig`, `noto-fonts-cjk` | 한글 UI·자막 폰트 렌더링 |
+| `harfbuzz`, `fribidi` | 텍스트 셰이핑 및 양방향 글꼴 처리 |
+| `libice`, `libsm` | X11 세션 관리 라이브러리 |
+| `alsa-lib`, `libpipewire`, `pipewire-jack` | 리눅스 오디오 출력 (`libmpv`) |
 
 ## 구조
 

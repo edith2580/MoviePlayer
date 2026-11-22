@@ -276,16 +276,20 @@ jobs:
           - name: x86_64
             runner: ubuntu-24.04
             arch: x86_64
+            qt_host: linux
+            qt_arch: linux_gcc_64
             artifact: MoviePlayer-linux-x64
           - name: arm64
             runner: ubuntu-24.04-arm
             arch: aarch64
+            qt_host: linux_arm64
+            qt_arch: linux_gcc_arm64
             artifact: MoviePlayer-linux-arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Qt6 and libmpv dependencies
+      - name: Install System Dependencies (for .deb and libmpv)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -299,6 +303,7 @@ jobs:
             libmpv-dev \
             libgl1-mesa-dev \
             libxcb-cursor0 \
+            libxkbcommon-x11-0 \
             dpkg-dev \
             desktop-file-utils \
             imagemagick \
@@ -317,32 +322,50 @@ jobs:
           fi
           echo "VERSION=$VER" >> "$GITHUB_OUTPUT"
 
-      - name: Configure and Build
-        run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --parallel
-
-      - name: Package AppImage (.AppImage) & Debian Installer (.deb)
+      - name: Build and Package Debian Installer (.deb with system Qt6)
         run: |
           VERSION="${{ steps.vars.outputs.VERSION }}"
           ARCH="${{ matrix.arch }}"
           mkdir -p dist
 
-          # 1) Debian/Ubuntu .deb package
-          pushd build
+          cmake -B build-deb -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-deb --parallel
+
+          pushd build-deb
           cpack -G DEB
           cp MoviePlayer-*.deb "../dist/MoviePlayer-${VERSION}-linux-${ARCH}.deb"
           popd
 
-          # 2) AppImage (.AppImage) via linuxdeploy + linuxdeploy-plugin-qt
+      - name: Install Qt ${{ env.QT_VERSION }} (for AppImage)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: ${{ matrix.qt_host }}
+          target: desktop
+          arch: ${{ matrix.qt_arch }}
+          modules: qtwayland
+          cache: true
+
+      - name: Build and Package AppImage (.AppImage with Qt ${{ env.QT_VERSION }})
+        run: |
+          VERSION="${{ steps.vars.outputs.VERSION }}"
+          ARCH="${{ matrix.arch }}"
+          mkdir -p dist
+
+          cmake -B build-appimage -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$Qt6_DIR"
+          cmake --build build-appimage --parallel
+
+          # AppImage (.AppImage) via linuxdeploy + linuxdeploy-plugin-qt
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
           mkdir -p AppDir/usr/share/doc/movieplayer
 
-          cp build/MoviePlayer AppDir/usr/bin/MoviePlayer
+          cp build-appimage/MoviePlayer AppDir/usr/bin/MoviePlayer
           strip AppDir/usr/bin/MoviePlayer
-          cp packaging/linux/movieplayer.desktop AppDir/usr/share/applications/movieplayer.desktop
+          tr -d '\r' < packaging/linux/movieplayer.desktop > AppDir/usr/share/applications/movieplayer.desktop
           cp LICENSE res/THIRD_PARTY_NOTICES.txt AppDir/usr/share/doc/movieplayer/
 
           # Convert app.ico to 256x256 PNG icon for AppDir
@@ -354,15 +377,26 @@ jobs:
 
           export APPIMAGE_EXTRACT_AND_RUN=1
           export NO_STRIP=true
-          export QMAKE="$(command -v qmake6 || echo /usr/lib/qt6/bin/qmake)"
-          export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
+          export QMAKE="$Qt6_DIR/bin/qmake"
+          export LD_LIBRARY_PATH="$Qt6_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export LDAI_OUTPUT="dist/MoviePlayer-${VERSION}-linux-${ARCH}.AppImage"
 
-          # Copy Qt6 Wayland client sub-plugins (needed for wayland-egl / QOpenGLWidget)
-          # and let linuxdeploy bundle their shared library dependencies and patch RPATH.
           QT_PLUGINS_DIR="$("$QMAKE" -query QT_INSTALL_PLUGINS)"
+
+          # Auto-detect Wayland platform plugins across Qt 6.4 (libqwayland-egl/generic)
+          # and Qt 6.10+ (unified libqwayland.so).
+          EXTRA_LIST=""
+          for p in libqwayland-egl.so libqwayland-generic.so libqwayland.so; do
+            if [ -f "${QT_PLUGINS_DIR}/platforms/${p}" ]; then
+              EXTRA_LIST="${EXTRA_LIST:+${EXTRA_LIST};}${p}"
+            fi
+          done
+          export EXTRA_PLATFORM_PLUGINS="$EXTRA_LIST"
+
+          # Copy Qt6 Wayland client sub-plugins, XCB GL integrations, and TLS backends
+          # and let linuxdeploy bundle their shared library dependencies and patch RPATH.
           DEPLOY_DEPS_ARGS=()
-          for dir in wayland-decoration-client wayland-graphics-integration-client wayland-shell-integration; do
+          for dir in wayland-decoration-client wayland-graphics-integration-client wayland-shell-integration xcbglintegrations tls; do
             if [ -d "${QT_PLUGINS_DIR}/${dir}" ]; then
               mkdir -p "AppDir/usr/plugins/${dir}"
               cp -a "${QT_PLUGINS_DIR}/${dir}/." "AppDir/usr/plugins/${dir}/"
@@ -379,10 +413,11 @@ jobs:
             "${DEPLOY_DEPS_ARGS[@]}" \
             --output appimage
 
-          # Verify X11 (xcb), Wayland platform, and Wayland EGL plugins were bundled
+          # Verify X11 (xcb), Wayland platform, Wayland EGL, and TLS plugins were bundled
           test -f AppDir/usr/plugins/platforms/libqxcb.so
-          test -f AppDir/usr/plugins/platforms/libqwayland-generic.so
+          test -f AppDir/usr/plugins/platforms/libqwayland-generic.so -o -f AppDir/usr/plugins/platforms/libqwayland.so
           test -f AppDir/usr/plugins/wayland-graphics-integration-client/libqt-plugin-wayland-egl.so
+          test -f AppDir/usr/plugins/tls/libqopensslbackend.so
 
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4
