@@ -60,11 +60,14 @@ private:
     void HandleCheckReply(QNetworkReply* reply);
     void HandleDownloadReply(QNetworkReply* reply);
     bool ApplyDownloadedFile(const QString& filePath, bool* restartRequired, QString* message);
+    void RemoveDownloadDir();
 
     QNetworkAccessManager* network_ = nullptr;
     QNetworkReply* activeReply_ = nullptr;
     QFile* downloadFile_ = nullptr;
     QString downloadPath_;
+    // The private directory made for this download, or empty when saving to Downloads.
+    QString downloadDir_;
     InstallKind installKind_ = InstallKind::Unknown;
     ReleaseInfo currentRelease_;
 };

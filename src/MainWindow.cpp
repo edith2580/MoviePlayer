@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -21,6 +22,7 @@
 #include <QPointer>
 #include <QScreen>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QUrl>
 #include <QWheelEvent>
@@ -68,9 +70,31 @@ constexpr int kOpenRetryDelaysMs[] = {500, 1000, 1500, 2000, 3000};
 constexpr qint64 kSeekPreviewExpiryDurationMs = 3000;
 constexpr double kSeekPreviewToleranceSeconds = 2.0;
 
-QString SubtitleTempDirectory() {
-    const QString root = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-    return QDir(root).filePath(QStringLiteral("MoviePlayer/%1").arg(QCoreApplication::applicationPid()));
+// A new directory with a random name that only this user can enter (mkdtemp, mode 0700).
+// On Linux the temp root is the shared /tmp, where a fixed name would let another user
+// create the directory first, or plant a symlink in it, and redirect our writes and deletes.
+std::unique_ptr<QTemporaryDir> CreateSubtitleTempDirectory() {
+    auto dir = std::make_unique<QTemporaryDir>(QDir(QDir::tempPath()).filePath(QStringLiteral("MoviePlayer-XXXXXX")));
+    if (!dir->isValid()) {
+        return nullptr;
+    }
+    return dir;
+}
+
+// Empties the directory but keeps it, so its path never becomes free for someone else to take.
+void ClearDirectory(const QString& path) {
+    if (path.isEmpty()) {
+        return;
+    }
+    const QFileInfoList entries =
+        QDir(path).entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+    for (const QFileInfo& entry : entries) {
+        if (entry.isDir() && !entry.isSymLink()) {
+            QDir(entry.filePath()).removeRecursively();
+        } else {
+            QFile::remove(entry.filePath());
+        }
+    }
 }
 
 qint64 NowMs() {
@@ -115,7 +139,8 @@ bool IsNetworkPath(const QString& path) {
 MainWindow::MainWindow(const Settings& settings, QWidget* parent)
     : QWidget(parent),
       preferences_(settings.preferences),
-      subtitleTempDirectory_(SubtitleTempDirectory()) {
+      subtitleTempDir_(CreateSubtitleTempDirectory()),
+      subtitleTempDirectory_(subtitleTempDir_ ? subtitleTempDir_->path() : QString()) {
     playback_.volume = settings.volume;
     playback_.subtitleEncoding = settings.subtitleEncoding;
     playback_.adjustments = settings.videoAdjustments;
@@ -186,7 +211,8 @@ MainWindow::~MainWindow() {
     }
     delete player_;
     player_ = nullptr;
-    QDir(subtitleTempDirectory_).removeRecursively();
+    subtitleTempDir_.reset();  // Removes the directory.
+    subtitleTempDirectory_.clear();
 }
 
 void MainWindow::ShowInitial() {
@@ -644,7 +670,7 @@ void MainWindow::OpenVideo(const QString& path, const QString& preferredSubtitle
     videoHeight_ = 0;
     currentVideoPath_ = path;
     pendingSubtitleName_.clear();
-    QDir(subtitleTempDirectory_).removeRecursively();
+    ClearDirectory(subtitleTempDirectory_);
 
     QStringList subtitles;
     if (!preferredSubtitle.isEmpty()) {
@@ -1809,6 +1835,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         delete player_;
         player_ = nullptr;
     }
-    QDir(subtitleTempDirectory_).removeRecursively();
+    subtitleTempDir_.reset();  // Removes the directory.
+    subtitleTempDirectory_.clear();
     QWidget::closeEvent(event);
 }

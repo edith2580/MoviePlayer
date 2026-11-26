@@ -306,8 +306,11 @@ QStringList PrepareSmiFile(const QString& smi, const QString& outputDirectory) {
         return {smi};
     }
 
-    QDir dir(outputDirectory);
-    if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+    // The caller owns a private directory for these. Never create one here: an empty path
+    // would mean the current directory, and recreating a missing one under the shared temp
+    // root would reopen the hole a private directory closes.
+    const QDir dir(outputDirectory);
+    if (outputDirectory.isEmpty() || !dir.exists()) {
         return {smi};
     }
 

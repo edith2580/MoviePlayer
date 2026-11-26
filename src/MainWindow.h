@@ -8,6 +8,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <memory>
 #include <optional>
 
 #include "ContextMenu.h"
@@ -18,6 +19,7 @@
 
 class MpvVideoWidget;
 class QProcess;
+class QTemporaryDir;
 class QTimer;
 
 // The top-level window. It takes all keyboard and mouse input and turns it into
@@ -147,7 +149,9 @@ private:
     PlaybackState playback_;
     Preferences preferences_;
 
-    QString subtitleTempDirectory_;
+    // Where split SMI files go: a private directory that lives as long as the window.
+    std::unique_ptr<QTemporaryDir> subtitleTempDir_;
+    QString subtitleTempDirectory_;  // Its path, or empty if it couldn't be created.
     QString currentVideoPath_;
     QString pendingSubtitleName_;  // The file name of the subtitle to select once the video is ready.
 

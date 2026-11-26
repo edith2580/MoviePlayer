@@ -14,6 +14,7 @@
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QUrl>
 #include <QVersionNumber>
 
@@ -224,6 +225,14 @@ void AppUpdater::Cancel() {
         downloadFile_ = nullptr;
     }
     downloadPath_.clear();
+    RemoveDownloadDir();
+}
+
+void AppUpdater::RemoveDownloadDir() {
+    if (!downloadDir_.isEmpty()) {
+        QDir(downloadDir_).removeRecursively();
+        downloadDir_.clear();
+    }
 }
 
 void AppUpdater::CheckForUpdates() {
@@ -308,10 +317,21 @@ void AppUpdater::DownloadAndApply(const ReleaseInfo& release) {
         targetDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
     }
     if (targetDir.isEmpty()) {
-        targetDir = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
-                        .filePath(QStringLiteral("MoviePlayerUpdate"));
+        // A new directory with a random name that only this user can enter (mkdtemp, mode 0700).
+        // On Linux the temp root is the shared /tmp, where a fixed name would let another user
+        // own the directory and swap the download or the helper script before they run.
+        QTemporaryDir tempDir(QDir(QDir::tempPath()).filePath(QStringLiteral("MoviePlayerUpdate-XXXXXX")));
+        if (!tempDir.isValid()) {
+            emit downloadFailed(QStringLiteral("임시 폴더를 만들 수 없습니다: %1").arg(tempDir.errorString()));
+            return;
+        }
+        // The helper script runs from here after the app exits, and removes it.
+        tempDir.setAutoRemove(false);
+        targetDir = tempDir.path();
+        downloadDir_ = targetDir;
+    } else {
+        QDir().mkpath(targetDir);
     }
-    QDir().mkpath(targetDir);
 
     const QString safeName = QFileInfo(release.assetName).fileName();
     downloadPath_ = QDir(targetDir).filePath(safeName.isEmpty() ? QStringLiteral("update.bin") : safeName);
@@ -321,6 +341,7 @@ void AppUpdater::DownloadAndApply(const ReleaseInfo& release) {
         const QString err = downloadFile_->errorString();
         downloadFile_->deleteLater();
         downloadFile_ = nullptr;
+        RemoveDownloadDir();
         emit downloadFailed(QStringLiteral("임시 파일을 만들 수 없습니다: %1").arg(err));
         return;
     }
@@ -360,6 +381,7 @@ void AppUpdater::HandleDownloadReply(QNetworkReply* reply) {
             downloadFile_->deleteLater();
             downloadFile_ = nullptr;
         }
+        RemoveDownloadDir();
         emit downloadFailed(QStringLiteral("다운로드 실패: %1").arg(reply->errorString()));
         return;
     }
@@ -373,9 +395,12 @@ void AppUpdater::HandleDownloadReply(QNetworkReply* reply) {
     bool restartRequired = false;
     QString message;
     if (!ApplyDownloadedFile(savedPath, &restartRequired, &message)) {
+        RemoveDownloadDir();
         emit downloadFailed(message);
         return;
     }
+    // From here the installer, helper script or user needs the file, so keep the directory.
+    downloadDir_.clear();
     emit updateReadyToApply(restartRequired, message);
 }
 
@@ -429,7 +454,8 @@ bool AppUpdater::ApplyDownloadedFile(const QString& filePath, bool* restartRequi
             "Copy-Item -Path (Join-Path $stageDir '*') -Destination $appDir -Recurse -Force\n"
             "Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue\n"
             "Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue\n"
-            "Start-Process -FilePath $exePath\n")
+            "Start-Process -FilePath $exePath\n"
+            "Remove-Item -LiteralPath '%5' -Recurse -Force -ErrorAction SilentlyContinue\n")
                                    .arg(pid)
                                    .arg(psEscape(zipPath), psEscape(appDir), psEscape(exePath), psEscape(tempRoot));
 
@@ -493,6 +519,8 @@ bool AppUpdater::ApplyDownloadedFile(const QString& filePath, bool* restartRequi
                 "hdiutil detach \"$MNT\" -quiet || true\n"
                 "rmdir \"$MNT\" 2>/dev/null || true\n"
                 "rm -f \"$DMG\"\n"
+                "rm -f \"$0\"\n"
+                "rmdir \"$(dirname \"$0\")\" 2>/dev/null || true\n"
                 "open \"$APP_PATH\"\n")
                                        .arg(pid)
                                        .arg(shEscape(filePath), shEscape(appBundlePath));
@@ -545,6 +573,8 @@ bool AppUpdater::ApplyDownloadedFile(const QString& filePath, bool* restartRequi
                 "done\n"
                 "mv -f \"$NEW_IMG\" \"$CUR_IMG\"\n"
                 "chmod +x \"$CUR_IMG\"\n"
+                "rm -f \"$0\"\n"
+                "rmdir \"$(dirname \"$0\")\" 2>/dev/null || true\n"
                 "nohup \"$CUR_IMG\" >/dev/null 2>&1 &\n")
                                        .arg(pid)
                                        .arg(shEscape(filePath), shEscape(currentAppImage));
