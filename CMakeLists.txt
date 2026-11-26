@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(MoviePlayer VERSION 0.1.4 LANGUAGES CXX)
+project(MoviePlayer VERSION 0.1.5 LANGUAGES CXX)
 
 if(WIN32)
     enable_language(RC)
