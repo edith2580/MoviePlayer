@@ -98,29 +98,58 @@ with open(png_path, "wb") as f:
 PY
 chmod 0644 "${ICON_DST}"
 
+# Fixed releases with known hashes, the same as .github/workflows/build.yml uses.
+# To upgrade, change the tags and hashes in both places together.
+LINUXDEPLOY_TAG="1-alpha-20251107-1"
+LINUXDEPLOY_QT_TAG="1-alpha-20250213-1"
+case "${ARCH}" in
+    x86_64)
+        LINUXDEPLOY_SHA256="c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d"
+        LINUXDEPLOY_QT_SHA256="15106be885c1c48a021198e7e1e9a48ce9d02a86dd0a1848f00bdbf3c1c92724"
+        ;;
+    aarch64)
+        LINUXDEPLOY_SHA256="620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff"
+        LINUXDEPLOY_QT_SHA256="bf1c24aff6d749b5cf423afad6f15abd4440f81dec1aab95706b25f6667cdcf1"
+        ;;
+    *)
+        echo "No pinned linuxdeploy hashes for ${ARCH}" >&2
+        exit 1
+        ;;
+esac
+
+# Checks the hash every run, so a cached copy from an older script (or a tampered one) is replaced.
 download_tool() {
     local name="$1"
     local url="$2"
+    local sha256="$3"
     local dest="${TOOLS_DIR}/${name}"
-    if [[ ! -x "${dest}" ]]; then
-        echo "==> Downloading ${name}..."
-        if command -v curl >/dev/null 2>&1; then
-            curl -fL --retry 3 -o "${dest}.tmp" "${url}"
-        else
-            wget -q -O "${dest}.tmp" "${url}"
-        fi
-        chmod +x "${dest}.tmp"
-        mv "${dest}.tmp" "${dest}"
+    if [[ -x "${dest}" ]] && echo "${sha256}  ${dest}" | sha256sum -c --status -; then
+        return
     fi
+    echo "==> Downloading ${name}..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 3 -o "${dest}.tmp" "${url}"
+    else
+        wget -q -O "${dest}.tmp" "${url}"
+    fi
+    if ! echo "${sha256}  ${dest}.tmp" | sha256sum -c --status -; then
+        rm -f "${dest}.tmp"
+        echo "SHA-256 mismatch for ${name}" >&2
+        exit 1
+    fi
+    chmod +x "${dest}.tmp"
+    mv "${dest}.tmp" "${dest}"
 }
 
 LINUXDEPLOY="${TOOLS_DIR}/linuxdeploy-${ARCH}.AppImage"
 LINUXDEPLOY_QT="${TOOLS_DIR}/linuxdeploy-plugin-qt-${ARCH}.AppImage"
 
 download_tool "linuxdeploy-${ARCH}.AppImage" \
-    "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${ARCH}.AppImage"
+    "https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_TAG}/linuxdeploy-${ARCH}.AppImage" \
+    "${LINUXDEPLOY_SHA256}"
 download_tool "linuxdeploy-plugin-qt-${ARCH}.AppImage" \
-    "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-${ARCH}.AppImage"
+    "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/${LINUXDEPLOY_QT_TAG}/linuxdeploy-plugin-qt-${ARCH}.AppImage" \
+    "${LINUXDEPLOY_QT_SHA256}"
 
 echo "==> Packaging AppImage (${OUT_NAME})..."
 export APPIMAGE_EXTRACT_AND_RUN=1

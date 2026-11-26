@@ -23,6 +23,7 @@ struct ReleaseInfo {
     QString htmlUrl;
     QString assetName;
     QString assetDownloadUrl;
+    QString assetSha256;  // Lowercase hex from the asset's GitHub "digest". Required to download.
     qint64 assetSize = 0;
     bool updateAvailable = false;
     bool canAutoUpdate = false;

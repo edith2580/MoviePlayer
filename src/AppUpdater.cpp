@@ -1,6 +1,7 @@
 #include "AppUpdater.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -132,6 +133,38 @@ bool MatchesAssetForInstallKind(const QString& assetName, InstallKind kind) {
         return false;
     }
     return false;
+}
+
+// GitHub reports each release asset's hash as "sha256:<64 hex digits>". Returns the
+// digits in lower case, or empty if the value is missing or in another form.
+QString Sha256FromDigest(const QString& digest) {
+    static const QString prefix = QStringLiteral("sha256:");
+    if (!digest.startsWith(prefix, Qt::CaseInsensitive)) {
+        return {};
+    }
+    const QString hex = digest.mid(prefix.size()).toLower();
+    if (hex.size() != 64) {
+        return {};
+    }
+    for (const QChar ch : hex) {
+        if (!((ch >= QLatin1Char('0') && ch <= QLatin1Char('9')) || (ch >= QLatin1Char('a') && ch <= QLatin1Char('f')))) {
+            return {};
+        }
+    }
+    return hex;
+}
+
+// Hashes the file as saved on disk, which is exactly what gets run or installed.
+QString Sha256OfFile(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!hash.addData(&file)) {
+        return {};
+    }
+    return QString::fromLatin1(hash.result().toHex());
 }
 
 QNetworkRequest BuildGitHubRequest(const QUrl& url, bool jsonApi) {
@@ -286,9 +319,14 @@ void AppUpdater::HandleCheckReply(QNetworkReply* reply) {
         const QJsonObject asset = val.toObject();
         const QString name = asset.value(QStringLiteral("name")).toString();
         if (MatchesAssetForInstallKind(name, installKind_)) {
-            info.assetName = name;
-            info.assetDownloadUrl = asset.value(QStringLiteral("browser_download_url")).toString();
-            info.assetSize = asset.value(QStringLiteral("size")).toInteger();
+            // Without a hash to check the download against, offer the release page instead.
+            const QString sha256 = Sha256FromDigest(asset.value(QStringLiteral("digest")).toString());
+            if (!sha256.isEmpty()) {
+                info.assetName = name;
+                info.assetDownloadUrl = asset.value(QStringLiteral("browser_download_url")).toString();
+                info.assetSha256 = sha256;
+                info.assetSize = asset.value(QStringLiteral("size")).toInteger();
+            }
             break;
         }
     }
@@ -303,7 +341,7 @@ void AppUpdater::DownloadAndApply(const ReleaseInfo& release) {
     if (IsBusy()) {
         return;
     }
-    if (release.assetDownloadUrl.isEmpty()) {
+    if (release.assetDownloadUrl.isEmpty() || release.assetSha256.isEmpty()) {
         QDesktopServices::openUrl(QUrl(release.htmlUrl.isEmpty()
                                            ? QString::fromLatin1(AppInfo::kGithubReleasesUrl)
                                            : release.htmlUrl));
@@ -390,6 +428,16 @@ void AppUpdater::HandleDownloadReply(QNetworkReply* reply) {
     if (downloadFile_) {
         downloadFile_->deleteLater();
         downloadFile_ = nullptr;
+    }
+
+    // HTTPS only protects the transfer. Check the file against the hash GitHub reported
+    // for the asset before running or installing anything, so a swapped or truncated
+    // download (a failed disk write included) is never used.
+    if (Sha256OfFile(savedPath) != currentRelease_.assetSha256) {
+        QFile::remove(savedPath);
+        RemoveDownloadDir();
+        emit downloadFailed(QStringLiteral("다운로드한 파일이 릴리스 정보와 일치하지 않아(SHA-256 불일치) 업데이트를 중단했습니다."));
+        return;
     }
 
     bool restartRequired = false;
