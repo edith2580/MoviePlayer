@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-</dict>
+<!--
+  No hardened-runtime exceptions are needed, so none are granted:
+  - JIT / unsigned executable memory: mpv scripts (and so LuaJIT) are turned off
+    (load-scripts=no), and neither Qt Widgets nor FFmpeg generates machine code.
+  - Library validation stays on: every bundled dylib, framework and plugin is signed
+    with the same identity in the workflow, so only our own code can be loaded.
+  If the signed app fails to load a library with "different Team IDs" or "code
+  signature invalid", sign that file in the workflow rather than adding an exception.
+-->
+<dict/>
 </plist>
