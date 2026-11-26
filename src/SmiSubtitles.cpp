@@ -14,6 +14,13 @@
 namespace {
 
 constexpr qint64 kMaxSmiFileSize = 64 * 1024 * 1024;
+// Limits for splitting, which runs on the UI thread with input from any file next to
+// a video. Real files have two or three languages and are well under a megabyte.
+// Past these the file is passed to mpv as it is.
+constexpr size_t kMaxSmiLanguages = 8;
+// Text without a class goes into every language's copy, so the copies can add up to
+// many times the input.
+constexpr size_t kMaxSplitOutputSize = 128 * 1024 * 1024;
 constexpr std::string_view kUtf8Bom = "\xEF\xBB\xBF";
 
 // In the encodings SMI files use (UTF-8, CP949, Shift-JIS), the trailing bytes of a
@@ -223,7 +230,8 @@ std::vector<SmiLanguage> SplitSmiByLanguage(std::string_view content) {
 
     // Parse every timed block, and note the classes in order of first appearance.
     std::vector<SyncBlock> blocks;
-    std::vector<std::string> classes;
+    std::vector<std::string> classes;  // In order of first appearance.
+    std::set<std::string> knownClasses;  // The same names, for lookup.
     std::set<std::string> classesWithText;
     size_t at = firstSync;
     while (at != std::string_view::npos && at < bodyEnd) {
@@ -231,11 +239,14 @@ std::vector<SmiLanguage> SplitSmiByLanguage(std::string_view content) {
         if (next == std::string_view::npos || next > bodyEnd) {
             next = bodyEnd;
         }
-        const size_t tagEnd = content.find('>', at);
-        if (tagEnd == std::string_view::npos || tagEnd >= next) {
+        // Look for the tag's end only inside this block. Searching the rest of the file
+        // would rescan it for every <sync> that has no '>', which is quadratic.
+        const size_t endInBlock = content.substr(at, next - at).find('>');
+        if (endInBlock == std::string_view::npos) {
             at = next == bodyEnd ? std::string_view::npos : next;
             continue;
         }
+        const size_t tagEnd = at + endInBlock;
         SyncBlock block;
         block.tag = content.substr(at, tagEnd + 1 - at);
         block.paragraphs = ParseParagraphs(content.substr(tagEnd + 1, next - tagEnd - 1));
@@ -243,8 +254,11 @@ std::vector<SmiLanguage> SplitSmiByLanguage(std::string_view content) {
             if (paragraph.className.empty()) {
                 continue;
             }
-            if (std::find(classes.begin(), classes.end(), paragraph.className) == classes.end()) {
+            if (knownClasses.insert(paragraph.className).second) {
                 classes.push_back(paragraph.className);
+                if (classes.size() > kMaxSmiLanguages) {
+                    return {};
+                }
             }
             if (HasVisibleText(paragraph.markup)) {
                 classesWithText.insert(paragraph.className);
@@ -262,6 +276,7 @@ std::vector<SmiLanguage> SplitSmiByLanguage(std::string_view content) {
 
     std::vector<SmiLanguage> languages;
     std::set<std::string> usedTags;
+    size_t outputSize = 0;
     for (const std::string& className : classes) {
         if (classesWithText.count(className) == 0) {
             continue;
@@ -274,6 +289,27 @@ std::vector<SmiLanguage> SplitSmiByLanguage(std::string_view content) {
             language.tag += "-" + lowerClass;
             usedTags.insert(language.tag);
         }
+        // Work out this copy's size before building it, so a file that would need too much
+        // memory is given up on without allocating any of it.
+        size_t size = header.size() + footer.size();
+        for (const SyncBlock& block : blocks) {
+            bool opened = false;
+            for (const Paragraph& paragraph : block.paragraphs) {
+                if (paragraph.className == className || paragraph.className.empty()) {
+                    if (!opened) {
+                        size += block.tag.size();
+                        opened = true;
+                    }
+                    size += paragraph.markup.size();
+                }
+            }
+        }
+        outputSize += size;
+        if (outputSize > kMaxSplitOutputSize) {
+            return {};
+        }
+
+        language.content.reserve(size);
         language.content.assign(header);
         for (const SyncBlock& block : blocks) {
             bool opened = false;

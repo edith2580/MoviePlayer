@@ -16,8 +16,10 @@ struct SmiLanguage {
 };
 
 // Returns one entry per language, Korean first. Returns nothing if the file uses
-// fewer than two classes and so can be played as it is. Works on raw bytes, so
-// the text keeps its original encoding and mpv's encoding setting still applies.
+// fewer than two classes and so can be played as it is, or if splitting it would
+// take more than a few languages or too much memory (then it's played as it is too).
+// Works on raw bytes, so the text keeps its original encoding and mpv's encoding
+// setting still applies.
 std::vector<SmiLanguage> SplitSmiByLanguage(std::string_view content);
 
 bool IsSmiFile(const QString& path);
